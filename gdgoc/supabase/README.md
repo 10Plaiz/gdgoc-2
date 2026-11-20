@@ -26,11 +26,7 @@ If another local Supabase project already uses ports 54320–54329, stop it firs
 
 ## Rules for new migrations
 
-- Add a new migration file (`npx supabase migration new <name>`). Never edit one that has already been applied to production.
-- Every new table enables RLS in the same migration, and writes check `(select private.is_moderator())` (ADR-0001).
-- Put helpers in `private`, with `security definer` only when needed and always with `set search_path = ''`.
-- Add a pgTAP test for every rule a Member shouldn't be able to get around.
-- `seed.sql` holds fake placeholder data only. Never use real member data.
+See the Database section of [`CODING_STANDARDS.md`](../../CODING_STANDARDS.md). The reviewer enforces it.
 
 ## Make the first Moderator
 
