@@ -5,7 +5,7 @@
 begin;
 create extension if not exists pgtap with schema extensions;
 
-select plan(29);
+select plan(30);
 
 -- ---------------------------------------------------------------------------
 -- Fixtures (as postgres, so no RLS and no website role).
@@ -20,12 +20,12 @@ insert into public."Users" (user_id, first_name, last_name, email, is_admin) val
 
 delete from public.events;  -- ignore seed rows
 
-insert into public.events (id, title, category, starts_at, publish_status, is_featured) values
-  ('10000000-0000-0000-0000-000000000001', 'Published upcoming', 'workshop',  now() + interval '7 days', 'published',   true),
-  ('10000000-0000-0000-0000-000000000002', 'Published past',     'talk',      now() - interval '7 days', 'published',   false),
-  ('10000000-0000-0000-0000-000000000003', 'Draft',              'hackathon', now() + interval '9 days', 'draft',       false),
-  ('10000000-0000-0000-0000-000000000004', 'Unpublished',        'social',    now() + interval '9 days', 'unpublished', false),
-  ('10000000-0000-0000-0000-000000000005', 'Archived',           'social',    now() - interval '400 days', 'archived',  false);
+insert into public.events (id, title, category, starts_at, ends_at, publish_status, is_featured) values
+  ('10000000-0000-0000-0000-000000000001', 'Published upcoming', 'workshop',  now() + interval '7 days',   now() + interval '7 days 2 hours',   'published',   true),
+  ('10000000-0000-0000-0000-000000000002', 'Published past',     'talk',      now() - interval '7 days',   now() - interval '7 days' + interval '2 hours', 'published', false),
+  ('10000000-0000-0000-0000-000000000003', 'Draft',              'hackathon', now() + interval '9 days',   now() + interval '10 days',          'draft',       false),
+  ('10000000-0000-0000-0000-000000000004', 'Unpublished',        'social',    now() + interval '9 days',   now() + interval '9 days 3 hours',   'unpublished', false),
+  ('10000000-0000-0000-0000-000000000005', 'Archived',           'social',    now() - interval '400 days', now() - interval '400 days' + interval '3 hours', 'archived', false);
 
 -- Helpers to act as a website role.
 create function pg_temp.act_as_anon() returns void language sql as $$
@@ -59,7 +59,7 @@ select is((select count(*)::int from public.events), 5, 'an Administrator sees e
 -- ---------------------------------------------------------------------------
 select pg_temp.act_as_anon();
 select throws_ok(
-  $$ insert into public.events (title, category, starts_at) values ('x', 'talk', now()) $$,
+  $$ insert into public.events (title, category, starts_at, ends_at) values ('x', 'talk', now(), now() + interval '1 hour') $$,
   '42501', null, 'a visitor cannot create an Event');
 
 select throws_ok(
@@ -71,7 +71,7 @@ select throws_ok(
 
 select pg_temp.act_as('00000000-0000-0000-0000-00000000000b');
 select throws_ok(
-  $$ insert into public.events (title, category, starts_at) values ('x', 'talk', now()) $$,
+  $$ insert into public.events (title, category, starts_at, ends_at) values ('x', 'talk', now(), now() + interval '1 hour') $$,
   '42501', null, 'a Member cannot create an Event');
 
 update public.events set title = 'Hacked' where id = '10000000-0000-0000-0000-000000000001';
@@ -87,8 +87,9 @@ select is((select count(*)::int from public.events where id = '10000000-0000-000
           1, 'a Member cannot delete an Event');
 
 select lives_ok(
-  $$ insert into public.events (id, title, category, starts_at)
-     values ('10000000-0000-0000-0000-000000000006', 'New workshop', 'workshop', now() + interval '1 day') $$,
+  $$ insert into public.events (id, title, category, starts_at, ends_at)
+     values ('10000000-0000-0000-0000-000000000006', 'New workshop', 'workshop',
+             now() + interval '1 day', now() + interval '1 day 3 hours') $$,
   'an Administrator can create an Event');
 select is((select publish_status from public.events where id = '10000000-0000-0000-0000-000000000006'),
           'draft', 'a new Event starts as a draft');
@@ -107,30 +108,34 @@ select lives_ok(
 -- Data rules
 -- ---------------------------------------------------------------------------
 select lives_ok(
-  $$ insert into public.events (title, category, starts_at)
-     select 'Category ' || c, c, now() from unnest(array['workshop', 'hackathon', 'talk', 'social']) c $$,
+  $$ insert into public.events (title, category, starts_at, ends_at)
+     select 'Category ' || c, c, now(), now() + interval '1 hour' from unnest(array['workshop', 'hackathon', 'talk', 'social']) c $$,
   'the four Event categories are accepted');
 
 select throws_ok(
-  $$ insert into public.events (title, category, starts_at) values ('x', 'sprint', now()) $$,
+  $$ insert into public.events (title, category, starts_at, ends_at) values ('x', 'sprint', now(), now() + interval '1 hour') $$,
   '23514', null, 'sprint is no longer an Event category');
 
 select throws_ok(
-  $$ insert into public.events (title, category, starts_at, publish_status) values ('x', 'talk', now(), 'hidden') $$,
+  $$ insert into public.events (title, category, starts_at, ends_at, publish_status) values ('x', 'talk', now(), now() + interval '1 hour', 'hidden') $$,
   '23514', null, 'publish status must be draft, published, unpublished or archived');
 
 select throws_ok(
-  $$ insert into public.events (title, category, starts_at, registration_status) values ('x', 'talk', now(), 'full') $$,
+  $$ insert into public.events (title, category, starts_at, ends_at, registration_status) values ('x', 'talk', now(), now() + interval '1 hour', 'full') $$,
   '23514', null, 'registration status must be not_open, open or closed');
 
 select throws_ok(
-  $$ insert into public.events (title, category, starts_at, registration_status) values ('x', 'talk', now(), 'open') $$,
+  $$ insert into public.events (title, category, starts_at, ends_at, registration_status) values ('x', 'talk', now(), now() + interval '1 hour', 'open') $$,
   '23514', null, 'open registration needs a registration URL');
 
 select throws_ok(
-  $$ insert into public.events (title, category, starts_at, registration_url)
-     values ('x', 'talk', now(), 'javascript:alert(1)') $$,
+  $$ insert into public.events (title, category, starts_at, ends_at, registration_url)
+     values ('x', 'talk', now(), now() + interval '1 hour', 'javascript:alert(1)') $$,
   '23514', null, 'the registration URL must be https');
+
+select throws_ok(
+  $$ insert into public.events (title, category, starts_at) values ('x', 'talk', now()) $$,
+  '23502', null, 'every Event needs an end time');
 
 select throws_ok(
   $$ insert into public.events (title, category, starts_at, ends_at)
@@ -138,15 +143,15 @@ select throws_ok(
   '23514', null, 'an Event cannot end before it starts');
 
 select throws_ok(
-  $$ insert into public.events (title, category, starts_at, cover_path)
-     values ('x', 'talk', now(), 'someone-else/cover.webp') $$,
+  $$ insert into public.events (title, category, starts_at, ends_at, cover_path)
+     values ('x', 'talk', now(), now() + interval '1 hour', 'someone-else/cover.webp') $$,
   '23514', null, 'a cover image must live in the Event''s own folder');
 
 -- ---------------------------------------------------------------------------
 -- Featured event: at most one, published only
 -- ---------------------------------------------------------------------------
 select throws_ok(
-  $$ insert into public.events (title, category, starts_at, is_featured) values ('x', 'talk', now(), true) $$,
+  $$ insert into public.events (title, category, starts_at, ends_at, is_featured) values ('x', 'talk', now(), now() + interval '1 hour', true) $$,
   '23514', null, 'a draft cannot be the Featured event');
 
 select throws_ok(

@@ -14,10 +14,9 @@
 -- to the live project; the Supabase project is being recreated, PRD §5.5):
 --   * The live table has at least these columns, with is_admin a boolean.
 --   * Existing policies on "Users" are unknown. Permissive policies are OR'd
---     together, so an older broad policy (for example "anyone can select")
---     would quietly override the ones below. List them with
---       select policyname, cmd, roles from pg_policies where tablename = 'Users';
---     and drop any that grant more than these.
+--     together, so an older broad one (for example "anyone can select") would
+--     quietly override the ones below. This migration therefore drops every
+--     policy on "Users" before creating its own (see below).
 --   * The sign-up page inserts the Users row right after auth.signUp(). That
 --     only works while a session exists at that moment, i.e. while email
 --     confirmation is off (as in config.toml). With confirmation on, the
@@ -62,20 +61,32 @@ grant execute on function private.is_admin() to anon, authenticated, service_rol
 -- Users policies (fixes finding F1 together with the trigger below).
 -- A Member reads and edits only their own row; Administrators read and edit all
 -- rows, which is how /admin grants and revokes the role.
+--
+-- Start from no policies at all, so whatever the live table had before can't
+-- widen access. On a fresh database this loop finds nothing.
 -- ---------------------------------------------------------------------------
-drop policy if exists "Members read their own row; Administrators read all" on public."Users";
+do $$
+declare
+  existing record;
+begin
+  for existing in
+    select policyname from pg_policies where schemaname = 'public' and tablename = 'Users'
+  loop
+    execute format('drop policy %I on public."Users"', existing.policyname);
+  end loop;
+end;
+$$;
+
 create policy "Members read their own row; Administrators read all"
   on public."Users" for select
   to authenticated
   using (user_id = (select auth.uid()) or (select private.is_admin()));
 
-drop policy if exists "Members create their own row" on public."Users";
 create policy "Members create their own row"
   on public."Users" for insert
   to authenticated
   with check (user_id = (select auth.uid()));
 
-drop policy if exists "Members edit their own row; Administrators edit all" on public."Users";
 create policy "Members edit their own row; Administrators edit all"
   on public."Users" for update
   to authenticated

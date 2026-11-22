@@ -8,7 +8,7 @@ The Sprint 1 PRD gives each Event one status: Upcoming, Registration Open, Regis
 
 - **Publish status** (draft, published, unpublished, archived), set by an Administrator.
 - **Event timing** (Upcoming, Ongoing, Completed), never stored: it follows from `starts_at` and `ends_at`.
-- **Registration status** (not open yet, open, closed), set by an Administrator, with an optional `registration_closes_at` that closes it automatically.
+- **Registration status** (not open yet, open, closed), set by an Administrator, with an optional `registration_closes_at` that closes it automatically. Registration also closes when the Event ends.
 
 The label shown is Ongoing once the Event has started; before that it's Upcoming, Registration Open or Registration Closed, from the registration status.
 
@@ -16,4 +16,4 @@ We chose this because the single status mixes facts that change for different re
 
 ## Consequences
 
-Coming Soon is "timing is Upcoming or Ongoing", Previous Events is "timing is Completed", computed with `coalesce(ends_at, starts_at)`. Admins never move Events between sections. Any query that lists Events must use the same rule, so it lives in one place (a view or a shared function), not in each page.
+Coming Soon is "timing is Upcoming or Ongoing", Previous Events is "timing is Completed", computed from `starts_at` and a required `ends_at` (an Event without an end could never be Ongoing). Admins never move Events between sections. Any query that lists Events must use the same rule, so it lives in one place (a view or a shared function), not in each page.

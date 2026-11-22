@@ -29,14 +29,14 @@ values
   ('5eed0000-0000-0000-0000-000000000004', 'Sample Social',
    'A placeholder past social.',
    'Recap of the sample social.',
-   'social', now() - interval '400 days', null,
+   'social', now() - interval '400 days', now() - interval '400 days' + interval '3 hours',
    'Sample Venue, Lobby', null, 'closed', null,
    'published', false),
 
   ('5eed0000-0000-0000-0000-000000000005', 'Draft Workshop',
    'An unpublished draft. Only Administrators see it.',
    '',
-   'workshop', now() + interval '45 days', null,
+   'workshop', now() + interval '45 days', now() + interval '45 days 2 hours',
    null, null, 'not_open', null,
    'draft', false);
 

@@ -59,7 +59,8 @@ create table public.events (
   body                   text not null default '',
   category               text not null,
   starts_at              timestamptz not null,
-  ends_at                timestamptz,
+  -- Required: Event timing needs both ends (PRD §1.2 "start and end time").
+  ends_at                timestamptz not null,
   venue                  text,
   -- Path inside the event-media bucket, always "<event id>/<file>".
   cover_path             text,
@@ -82,7 +83,8 @@ create table public.events (
     check (publish_status in ('draft', 'published', 'unpublished', 'archived')),
   constraint events_registration_status_valid
     check (registration_status in ('not_open', 'open', 'closed')),
-  constraint events_ends_after_starts check (ends_at is null or ends_at >= starts_at),
+  -- Strictly after, so every Event is ongoing for some time.
+  constraint events_ends_after_starts check (ends_at > starts_at),
   constraint events_registration_url_https
     check (registration_url is null or registration_url ~ '^https://[^\s]+$'),
   constraint events_registration_url_length

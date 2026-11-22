@@ -15,9 +15,9 @@ insert into public."Users" (user_id, first_name, last_name, email, is_admin) val
 
 delete from public.events;  -- ignore seed rows
 
-insert into public.events (id, title, category, starts_at, publish_status) values
-  ('30000000-0000-0000-0000-000000000001', 'Published', 'hackathon', now() - interval '30 days', 'published'),
-  ('30000000-0000-0000-0000-000000000002', 'Draft',     'workshop',  now() + interval '30 days', 'draft');
+insert into public.events (id, title, category, starts_at, ends_at, publish_status) values
+  ('30000000-0000-0000-0000-000000000001', 'Published', 'hackathon', now() - interval '30 days', now() - interval '28 days', 'published'),
+  ('30000000-0000-0000-0000-000000000002', 'Draft',     'workshop',  now() + interval '30 days', now() + interval '30 days 3 hours', 'draft');
 
 insert into public.event_timeline_items (event_id, position, starts_at, title) values
   ('30000000-0000-0000-0000-000000000001', 0, now() - interval '30 days', 'Opening'),

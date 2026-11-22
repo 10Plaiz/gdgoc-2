@@ -6,11 +6,11 @@
 --
 --   timing   upcoming   now <  starts_at
 --            ongoing    starts_at <= now < ends_at
---            completed  now >= coalesce(ends_at, starts_at)
+--            completed  now >= ends_at
 --
--- An Event with no end time goes straight from upcoming to completed when it
--- starts. Coming Soon is timing in (upcoming, ongoing); Previous Events is
--- timing = completed.
+-- ends_at is required, so every Event is ongoing between its start and end.
+-- Coming Soon is timing in (upcoming, ongoing); Previous Events is
+-- timing = completed. Register stays enabled until the Event ends.
 --
 -- Each rule takes the Event row and the moment to judge it at, so the rules
 -- are pure (immutable) and the view passes now().
@@ -23,9 +23,9 @@ security invoker
 set search_path = ''
 as $$
   select case
-    when p_at < p_event.starts_at                                 then 'upcoming'
-    when p_at < coalesce(p_event.ends_at, p_event.starts_at)      then 'ongoing'
-    else                                                               'completed'
+    when p_at < p_event.starts_at then 'upcoming'
+    when p_at < p_event.ends_at   then 'ongoing'
+    else                               'completed'
   end;
 $$;
 

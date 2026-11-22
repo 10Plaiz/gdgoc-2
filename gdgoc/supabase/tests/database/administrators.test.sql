@@ -80,7 +80,7 @@ select lives_ok(
 
 select pg_temp.act_as('00000000-0000-0000-0000-00000000000d');
 select throws_ok(
-  $$ insert into public.events (title, category, starts_at) values ('x', 'talk', now()) $$,
+  $$ insert into public.events (title, category, starts_at, ends_at) values ('x', 'talk', now(), now() + interval '1 hour') $$,
   '42501', null, 'a revoked Administrator can no longer create Events');
 select throws_ok(
   $$ update public."Users" set is_admin = true where user_id = '00000000-0000-0000-0000-00000000000d' $$,

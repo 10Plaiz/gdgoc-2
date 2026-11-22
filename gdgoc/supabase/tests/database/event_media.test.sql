@@ -6,7 +6,7 @@
 begin;
 create extension if not exists pgtap with schema extensions;
 
-select plan(16);
+select plan(21);
 
 -- Supabase blocks direct SQL deletes on storage tables; allow them in this
 -- rolled-back transaction so the delete policies themselves are tested.
@@ -21,9 +21,9 @@ insert into public."Users" (user_id, first_name, last_name, email, is_admin) val
 
 delete from public.events;  -- ignore seed rows
 
-insert into public.events (id, title, category, starts_at, publish_status) values
-  ('40000000-0000-0000-0000-000000000001', 'Published', 'talk',     now() + interval '1 day', 'published'),
-  ('40000000-0000-0000-0000-000000000002', 'Draft',     'workshop', now() + interval '9 days', 'draft');
+insert into public.events (id, title, category, starts_at, ends_at, publish_status) values
+  ('40000000-0000-0000-0000-000000000001', 'Published', 'talk',     now() + interval '1 day',  now() + interval '1 day 2 hours',  'published'),
+  ('40000000-0000-0000-0000-000000000002', 'Draft',     'workshop', now() + interval '9 days', now() + interval '9 days 3 hours', 'draft');
 
 insert into storage.objects (bucket_id, name) values
   ('event-media', '40000000-0000-0000-0000-000000000001/cover.webp'),
@@ -131,6 +131,33 @@ select lives_ok(
 select is((select count(*)::int from storage.objects
            where name = '40000000-0000-0000-0000-000000000002/gallery-1.webp'), 0,
           'the deleted image is gone');
+
+-- ---------------------------------------------------------------------------
+-- Storage budget: a capped folder per Event, and no files left behind
+-- ---------------------------------------------------------------------------
+-- The draft Event's folder already holds its cover.
+select lives_ok(
+  $$ insert into storage.objects (bucket_id, name)
+     select 'event-media', '40000000-0000-0000-0000-000000000002/photo-' || n || '.webp'
+     from generate_series(1, 20) n $$,
+  'an Event folder holds a cover and 20 Gallery photos');
+
+select throws_ok(
+  $$ insert into storage.objects (bucket_id, name)
+     values ('event-media', '40000000-0000-0000-0000-000000000002/photo-21.webp') $$,
+  '42501', null, 'an Event folder cannot hold more than 21 files');
+
+select throws_ok(
+  $$ delete from public.events where id = '40000000-0000-0000-0000-000000000002' $$,
+  '23503', null, 'an Event cannot be deleted while its folder still has files');
+
+select lives_ok(
+  $$ delete from storage.objects where name like '40000000-0000-0000-0000-000000000002/%' $$,
+  'an Administrator can empty an Event''s folder');
+
+select lives_ok(
+  $$ delete from public.events where id = '40000000-0000-0000-0000-000000000002' $$,
+  'an Event with an empty folder can be deleted');
 
 select * from finish();
 rollback;

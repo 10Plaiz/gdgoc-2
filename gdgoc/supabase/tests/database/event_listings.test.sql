@@ -22,18 +22,18 @@ values
   ('20000000-0000-0000-0000-000000000002', 'Starts right now',   'talk', now(), now() + interval '1 hour', 'not_open', null, null, 'published'),
   ('20000000-0000-0000-0000-000000000003', 'Half way through',   'hackathon', now() - interval '1 day', now() + interval '1 day', 'open', 'https://example.com/r', null, 'published'),
   ('20000000-0000-0000-0000-000000000004', 'Ends right now',     'talk', now() - interval '1 hour', now(), 'not_open', null, null, 'published'),
-  ('20000000-0000-0000-0000-000000000005', 'No end, started',    'social', now() - interval '1 second', null, 'not_open', null, null, 'published'),
-  ('20000000-0000-0000-0000-000000000006', 'No end, upcoming',   'social', now() + interval '1 second', null, 'not_open', null, null, 'published'),
-  -- registration
-  ('20000000-0000-0000-0000-000000000007', 'Registration open',   'workshop', now() + interval '7 days', null, 'open',   'https://example.com/r', null, 'published'),
-  ('20000000-0000-0000-0000-000000000008', 'Registration closed', 'workshop', now() + interval '7 days', null, 'closed', 'https://example.com/r', null, 'published'),
-  ('20000000-0000-0000-0000-000000000009', 'Closes right now',    'workshop', now() + interval '7 days', null, 'open',   'https://example.com/r', now(), 'published'),
-  ('20000000-0000-0000-0000-000000000010', 'Closes in a minute',  'workshop', now() + interval '7 days', null, 'open',   'https://example.com/r', now() + interval '1 minute', 'published'),
+  -- registration and the Register button
+  ('20000000-0000-0000-0000-000000000005', 'Open, ends in a second', 'hackathon', now() - interval '1 day', now() + interval '1 second', 'open', 'https://example.com/r', null, 'published'),
+  ('20000000-0000-0000-0000-000000000006', 'Open, ended right now',  'hackathon', now() - interval '1 day', now(), 'open', 'https://example.com/r', null, 'published'),
+  ('20000000-0000-0000-0000-000000000007', 'Registration open',   'workshop', now() + interval '7 days', now() + interval '7 days 3 hours', 'open',   'https://example.com/r', null, 'published'),
+  ('20000000-0000-0000-0000-000000000008', 'Registration closed', 'workshop', now() + interval '7 days', now() + interval '7 days 3 hours', 'closed', 'https://example.com/r', null, 'published'),
+  ('20000000-0000-0000-0000-000000000009', 'Closes right now',    'workshop', now() + interval '7 days', now() + interval '7 days 3 hours', 'open',   'https://example.com/r', now(), 'published'),
+  ('20000000-0000-0000-0000-000000000010', 'Closes in a minute',  'workshop', now() + interval '7 days', now() + interval '7 days 3 hours', 'open',   'https://example.com/r', now() + interval '1 minute', 'published'),
   ('20000000-0000-0000-0000-000000000011', 'Was open, now over',  'workshop', now() - interval '7 days', now() - interval '6 days', 'open', 'https://example.com/r', null, 'published'),
   -- year in Philippine time: 2025-12-31 17:00 UTC is 2026-01-01 01:00 PHT
-  ('20000000-0000-0000-0000-000000000012', 'New Year in Manila', 'social', '2025-12-31 17:00:00+00', null, 'not_open', null, null, 'published'),
+  ('20000000-0000-0000-0000-000000000012', 'New Year in Manila', 'social', '2025-12-31 17:00:00+00', '2025-12-31 20:00:00+00', 'not_open', null, null, 'published'),
   -- not public
-  ('20000000-0000-0000-0000-000000000013', 'Draft', 'talk', now() + interval '1 day', null, 'not_open', null, null, 'draft');
+  ('20000000-0000-0000-0000-000000000013', 'Draft', 'talk', now() + interval '1 day', now() + interval '1 day 1 hour', 'not_open', null, null, 'draft');
 
 create function pg_temp.listing(p_id text) returns public.event_listings language sql as $$
   select * from public.event_listings where id = p_id::uuid;
@@ -50,10 +50,6 @@ select is((pg_temp.listing('20000000-0000-0000-0000-000000000003')).timing, 'ong
           'an Event half way through is ongoing, not a Previous Event');
 select is((pg_temp.listing('20000000-0000-0000-0000-000000000004')).timing, 'completed',
           'an Event is completed from the moment it ends');
-select is((pg_temp.listing('20000000-0000-0000-0000-000000000005')).timing, 'completed',
-          'an Event with no end time is completed once it starts');
-select is((pg_temp.listing('20000000-0000-0000-0000-000000000006')).timing, 'upcoming',
-          'an Event with no end time is upcoming before it starts');
 
 -- ---------------------------------------------------------------------------
 -- Status label (PRD §1.2) and whether Register is enabled
@@ -75,14 +71,18 @@ select is((pg_temp.listing('20000000-0000-0000-0000-000000000009')).registration
           'Register is disabled once registration closes automatically');
 select is((pg_temp.listing('20000000-0000-0000-0000-000000000010')).registration_open, true,
           'Register is enabled while registration is open and before it closes');
+select is((pg_temp.listing('20000000-0000-0000-0000-000000000005')).registration_open, true,
+          'Register stays enabled while an Event is ongoing, until it ends');
+select is((pg_temp.listing('20000000-0000-0000-0000-000000000006')).registration_open, false,
+          'Register is disabled from the moment an Event ends');
 select is((pg_temp.listing('20000000-0000-0000-0000-000000000011')).registration_open, false,
           'Register is disabled once an Event is completed');
 
 -- ---------------------------------------------------------------------------
--- Year filter in Philippine time, and the public view follows Event RLS
+-- Year in Philippine time, and the public view follows Event RLS
 -- ---------------------------------------------------------------------------
 select is((pg_temp.listing('20000000-0000-0000-0000-000000000012')).event_year, 2026,
-          'the year filter uses Philippine time');
+          'event_year uses Philippine time');
 
 select set_config('role', 'anon', true), set_config('request.jwt.claims', '{"role":"anon"}', true);
 

@@ -42,9 +42,11 @@ Migrations are grouped by feature (`CODING_STANDARDS.md`). Events spans four fil
   - Year filter: a Philippine-time range on `starts_at`, for example `starts_at >= '2026-01-01T00:00:00+08:00'` and `< '2027-01-01T00:00:00+08:00'`. `event_year` is for display and grouping. Under RLS, Postgres can only use an index for leakproof comparisons, which a timestamp range is and `event_year = 2026` isn't.
   - Public lists add `publish_status = 'published'` (`.eq('publish_status', 'published')`). RLS already hides drafts, but the indexes are partial and only get used when the query states that filter.
   - Badge: `status_label` is `upcoming`, `registration_open`, `registration_closed`, `ongoing` or `completed`. Enable Register only when `registration_open` is true.
-- **Never compute timing in the app.** It lives in one place (`private.event_timing()`), so every page agrees. An Event is ongoing from `starts_at` until `ends_at`, and completed from `coalesce(ends_at, starts_at)` on.
+- **Never compute timing in the app.** It lives in one place (`private.event_timing()`), so every page agrees. Every Event has a required `ends_at` after `starts_at`. It is ongoing from `starts_at` until `ends_at`, and completed from `ends_at` on. Register stays enabled while it is ongoing and closes when it ends (or earlier, at `registration_closes_at`).
 - **Featured event:** call `rpc('set_featured_event', { p_event_id })`, or pass `null` to clear it. Only a published Event can be featured; unpublishing or archiving the Featured event clears it.
 - **Images:** upload to `event-media` at `<event id>/<file>.webp` and store that path in `events.cover_path` or `event_photos.path`. The bucket is private, so show images with `createSignedUrl()`. Visitors get a URL only while the Event is published.
+- **Deleting an Event:** first remove its files with `storage.from('event-media').remove([...])` (list the `<event id>/` folder), then delete the row. The database refuses to delete an Event whose folder still has files, so nothing is left behind; its Timeline and Gallery rows go with it.
+- **Storage budget:** an Event's folder holds at most 21 files (the cover and 20 Gallery photos), counted from the files themselves. When replacing a cover or photo, upload over the same path, or remove the old file first.
 - **Times** are `timestamptz`. Show them in Philippine Standard Time (`Asia/Manila`).
 
 ## Data model and normalization
@@ -65,12 +67,10 @@ See the Database section of [`CODING_STANDARDS.md`](../../CODING_STANDARDS.md). 
 
 The migrations have only run on local databases so far. Check these in the dashboard first. The project is being recreated under an organisation account (PRD §5.5), and a fresh project avoids most of them.
 
-- **`Users`:** the table already exists in production, and `…_administrators.sql` lists what it assumes about it: the columns, no broader old policies on `Users`, and email confirmation being off for sign-up.
-- **Old public `event-images` bucket:** an earlier draft used a public bucket of that name. If it exists in production, empty and delete it from the dashboard, or its files stay reachable by URL.
-
-## Known gaps
-
-- **Files in `event-media` aren't capped or cleaned up.** The 20-photo cap counts `event_photos` rows, not files, and deleting an Event deletes its rows but leaves its files. The admin panel should delete an Event's folder when it deletes the Event, and upload only after inserting the photo row. A scheduled cleanup can come later if needed.
+- **`Users` columns:** the table already exists in production. `…_administrators.sql` assumes it has the columns listed there, with `is_admin` a boolean.
+- **`Users` policies:** handled. The migration drops every existing policy on `Users` before creating its own, so an older broad policy can't widen access.
+- **Email confirmation at sign-up:** the sign-up page inserts the `Users` row right after `auth.signUp()`, which needs a session at that moment, so email confirmation must stay off. Turning it on needs an app change: create the row from a trigger on `auth.users` instead.
+- **Old public `event-images` bucket:** handled. The migration makes it private if it exists, so draft posters stop being reachable by URL. Its files are kept; delete them from the dashboard once you've moved anything still needed.
 
 ## Make the first Administrator
 
