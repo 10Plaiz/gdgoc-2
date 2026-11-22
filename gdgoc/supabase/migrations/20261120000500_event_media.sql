@@ -22,6 +22,27 @@ on conflict (id) do update
       file_size_limit    = excluded.file_size_limit,
       allowed_mime_types = excluded.allowed_mime_types;
 
+-- ---------------------------------------------------------------------------
+-- private.event_media_has_event(): true when a storage path sits in the
+-- folder of an Event that exists. Uploads and renames must pass it.
+-- security invoker: events RLS lets Administrators, the only writers, see
+-- every Event.
+-- ---------------------------------------------------------------------------
+create or replace function private.event_media_has_event(p_name text)
+returns boolean
+language sql
+stable
+security invoker
+set search_path = ''
+as $$
+  select exists (
+    select 1 from public.events e where e.id = private.event_media_owner(p_name)
+  );
+$$;
+
+revoke all on function private.event_media_has_event(text) from public;
+grant execute on function private.event_media_has_event(text) to authenticated, service_role;
+
 -- One select policy for both roles, so Postgres evaluates a single policy per row.
 create policy "Anyone reads media of published Events; Administrators read all"
   on storage.objects for select
@@ -34,15 +55,13 @@ create policy "Anyone reads media of published Events; Administrators read all"
     )
   );
 
--- Uploads must go into the folder of an Event that exists (events RLS lets
--- Administrators see every Event).
 create policy "Administrators upload event media"
   on storage.objects for insert
   to authenticated
   with check (
     bucket_id = 'event-media'
     and (select private.is_admin())
-    and private.event_media_owner(name) in (select e.id from public.events e)
+    and private.event_media_has_event(name)
   );
 
 create policy "Administrators replace event media"
@@ -52,7 +71,7 @@ create policy "Administrators replace event media"
   with check (
     bucket_id = 'event-media'
     and (select private.is_admin())
-    and private.event_media_owner(name) in (select e.id from public.events e)
+    and private.event_media_has_event(name)
   );
 
 create policy "Administrators delete event media"

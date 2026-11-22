@@ -6,7 +6,7 @@
 begin;
 create extension if not exists pgtap with schema extensions;
 
-select plan(17);
+select plan(16);
 
 -- Supabase blocks direct SQL deletes on storage tables; allow them in this
 -- rolled-back transaction so the delete policies themselves are tested.
@@ -55,8 +55,6 @@ select is((select file_size_limit from storage.buckets where id = 'event-media')
 select is((select allowed_mime_types from storage.buckets where id = 'event-media'),
           array['image/webp', 'image/jpeg', 'image/png'],
           'event-media accepts WebP, JPEG and PNG images only (no SVG)');
-select is((select count(*)::int from storage.buckets where id = 'event-images'), 0,
-          'the old public event-images bucket is gone');
 
 -- ---------------------------------------------------------------------------
 -- Reading

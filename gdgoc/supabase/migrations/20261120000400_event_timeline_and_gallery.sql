@@ -16,7 +16,7 @@ set search_path = ''
 as $$
   select exists (
     select 1 from public.events e
-    where e.id = p_event_id and e.publish_status = 'published'
+    where e.id = p_event_id and private.is_public(e.publish_status)
   );
 $$;
 
@@ -92,6 +92,7 @@ create table public.event_photos (
   alt_text   text not null default '',
   position   integer not null default 0,
   created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now(),
 
   constraint event_photos_path_unique         unique (path),
   constraint event_photos_path_in_event_folder check (private.event_media_owner(path) is not distinct from event_id),
@@ -104,6 +105,10 @@ comment on table public.event_photos is
   'The Gallery of an Event (max 20 photos, enforced by a trigger). Public when the Event is published.';
 
 create index event_photos_by_event on public.event_photos (event_id, position);
+
+create trigger event_photos_set_updated_at
+  before update on public.event_photos
+  for each row execute function private.set_updated_at();
 
 -- The cap keeps one Event from using up the Free Plan's 1 GB of storage.
 -- Locking the Event row makes concurrent uploads queue, so two inserts can't

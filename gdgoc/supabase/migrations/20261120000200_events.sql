@@ -32,8 +32,8 @@ as $$
   end;
 $$;
 
--- private.event_year(): the calendar year of a time in Philippine time, used
--- by the year filter (PRD §1.3, §5.3).
+-- private.event_year(): the calendar year of a time in Philippine time, shown
+-- as event_year in event_listings (PRD §1.3, §5.3).
 create or replace function private.event_year(p_at timestamptz)
 returns integer
 language sql
@@ -95,7 +95,7 @@ create table public.events (
     check (cover_path is null or private.event_media_owner(cover_path) is not distinct from id),
   -- A draft, unpublished or archived Event can't headline the public page.
   constraint events_featured_is_published
-    check (not is_featured or publish_status = 'published')
+    check (not is_featured or private.is_public(publish_status))
 );
 
 comment on table public.events is
@@ -126,7 +126,7 @@ security invoker
 set search_path = ''
 as $$
 begin
-  if new.publish_status <> 'published' then
+  if not private.is_public(new.publish_status) then
     new.is_featured := false;
   end if;
   return new;
@@ -140,24 +140,26 @@ create trigger events_unfeature_unpublished
   for each row execute function private.unfeature_unpublished_event();
 
 -- ---------------------------------------------------------------------------
--- Indexes for the public page: published Events by date, by category, by
--- year in Philippine time (PRD §1.3 filters) and title search.
+-- Indexes for the public page (PRD §1.2–1.3). Partial, because the public only
+-- lists published Events; queries must add publish_status = 'published' for
+-- the planner to use them (see gdgoc/supabase/README.md).
+--
+-- Under RLS, Postgres applies a filter before the policy only when its
+-- operator is leakproof. Comparisons on timestamptz and text equality are;
+-- ilike and function calls such as private.event_year() are not, so an index
+-- on them would never serve the website's queries. Hence:
+--   * by date:     starts_at, also serving the year filter as a PHT range
+--                  (starts_at >= '2026-01-01T00:00+08:00' and < '2027-01-01T00:00+08:00');
+--   * by category: category, then date;
+--   * title search (ilike '%term%') scans the published rows. A chapter has a
+--     few dozen Events a year, so that stays fast; revisit with a search RPC
+--     if it ever grows to thousands.
 -- ---------------------------------------------------------------------------
 create index events_published_by_start
   on public.events (starts_at desc) where publish_status = 'published';
 
 create index events_published_by_category
   on public.events (category, starts_at desc) where publish_status = 'published';
-
--- Matches the event_year column of event_listings.
-create index events_published_by_year
-  on public.events ((private.event_year(starts_at)))
-  where publish_status = 'published';
-
--- Title search with ilike '%term%'.
-create extension if not exists pg_trgm with schema extensions;
-create index events_title_search
-  on public.events using gin (title extensions.gin_trgm_ops);
 
 -- ---------------------------------------------------------------------------
 -- RLS: anyone reads published Events; only Administrators see the rest or write.
@@ -174,7 +176,7 @@ grant insert, update, delete on public.events to authenticated;
 create policy "Anyone reads published Events; Administrators read all"
   on public.events for select
   to anon, authenticated
-  using (publish_status = 'published' or (select private.is_admin()));
+  using (private.is_public(publish_status) or (select private.is_admin()));
 
 create policy "Administrators create Events"
   on public.events for insert

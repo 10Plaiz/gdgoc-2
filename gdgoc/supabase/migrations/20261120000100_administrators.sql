@@ -1,18 +1,8 @@
--- Administrators: the private schema, the Users baseline and the Administrator check.
+-- Administrators: the Users baseline and the Administrator check.
 --
 -- See docs/adr/0001-supabase-as-cms.md and docs/adr/0003-one-supabase-project.md.
 -- Every CMS table checks private.is_admin() in its RLS policies, so the
 -- Administrator flag (Users.is_admin) must be impossible for a Member to set.
-
--- ---------------------------------------------------------------------------
--- private schema: helpers the website's API never exposes.
--- It is not in [api].schemas in config.toml, so PostgREST can't reach it.
--- RLS policies run as the calling role, so that role needs USAGE to call
--- the helpers from inside a policy.
--- ---------------------------------------------------------------------------
-create schema if not exists private;
-revoke all on schema private from public;
-grant usage on schema private to anon, authenticated, service_role;
 
 -- ---------------------------------------------------------------------------
 -- Users baseline.
@@ -140,19 +130,3 @@ drop trigger if exists guard_admin_flag on public."Users";
 create trigger guard_admin_flag
   before insert or update on public."Users"
   for each row execute function private.guard_admin_flag();
-
--- ---------------------------------------------------------------------------
--- Shared trigger: keep updated_at current on every table that has one.
--- ---------------------------------------------------------------------------
-create or replace function private.set_updated_at()
-returns trigger
-language plpgsql
-set search_path = ''
-as $$
-begin
-  new.updated_at := now();
-  return new;
-end;
-$$;
-
-revoke all on function private.set_updated_at() from public;

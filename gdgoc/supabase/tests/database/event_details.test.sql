@@ -4,7 +4,7 @@
 begin;
 create extension if not exists pgtap with schema extensions;
 
-select plan(21);
+select plan(27);
 
 insert into auth.users (id, email, aud, role) values
   ('00000000-0000-0000-0000-00000000000a', 'admin@example.com',  'authenticated', 'authenticated'),
@@ -24,9 +24,9 @@ insert into public.event_timeline_items (event_id, position, starts_at, title) v
   ('30000000-0000-0000-0000-000000000001', 1, now() - interval '30 days' + interval '1 hour', 'Hacking starts'),
   ('30000000-0000-0000-0000-000000000002', 0, now() + interval '30 days', 'Draft item');
 
-insert into public.event_photos (event_id, path, alt_text, position) values
-  ('30000000-0000-0000-0000-000000000001', '30000000-0000-0000-0000-000000000001/1.webp', 'Teams at work', 0),
-  ('30000000-0000-0000-0000-000000000002', '30000000-0000-0000-0000-000000000002/1.webp', 'Draft photo', 0);
+insert into public.event_photos (event_id, path, alt_text, position, updated_at) values
+  ('30000000-0000-0000-0000-000000000001', '30000000-0000-0000-0000-000000000001/1.webp', 'Teams at work', 0, now() - interval '1 day'),
+  ('30000000-0000-0000-0000-000000000002', '30000000-0000-0000-0000-000000000002/1.webp', 'Draft photo', 0, now() - interval '1 day');
 
 create function pg_temp.act_as_anon() returns void language sql as $$
   select set_config('role', 'anon', true),
@@ -52,6 +52,8 @@ select is((select count(*)::int from public.event_photos), 1,
 select pg_temp.act_as('00000000-0000-0000-0000-00000000000b');
 select is((select count(*)::int from public.event_timeline_items), 2,
           'a Member sees the Timeline of published Events only');
+select is((select count(*)::int from public.event_photos), 1,
+          'a Member sees the Gallery of published Events only');
 
 select pg_temp.act_as('00000000-0000-0000-0000-00000000000a');
 select is((select count(*)::int from public.event_timeline_items), 3,
@@ -74,6 +76,12 @@ select throws_ok(
 select throws_ok(
   $$ delete from public.event_photos $$,
   '42501', null, 'a visitor cannot delete Gallery photos');
+select throws_ok(
+  $$ update public.event_photos set caption = 'Hacked' $$,
+  '42501', null, 'a visitor cannot edit Gallery photos');
+select throws_ok(
+  $$ delete from public.event_timeline_items $$,
+  '42501', null, 'a visitor cannot delete Timeline items');
 
 select pg_temp.act_as('00000000-0000-0000-0000-00000000000b');
 select throws_ok(
@@ -86,12 +94,18 @@ select throws_ok(
   '42501', null, 'a Member cannot add a Gallery photo');
 
 delete from public.event_photos;
+update public.event_photos set caption = 'Hacked';
 update public.event_timeline_items set title = 'Hacked';
+delete from public.event_timeline_items;
 
 select pg_temp.act_as('00000000-0000-0000-0000-00000000000a');
 select is((select count(*)::int from public.event_photos), 2, 'a Member cannot delete Gallery photos');
 select is((select count(*)::int from public.event_timeline_items where title = 'Hacked'), 0,
           'a Member cannot edit Timeline items');
+select is((select count(*)::int from public.event_photos where caption = 'Hacked'), 0,
+          'a Member cannot edit Gallery photos');
+select is((select count(*)::int from public.event_timeline_items), 3,
+          'a Member cannot delete Timeline items');
 
 select lives_ok(
   $$ insert into public.event_timeline_items (event_id, position, starts_at, ends_at, title, description)
@@ -101,6 +115,8 @@ select lives_ok(
 
 update public.event_timeline_items set title = 'Opening ceremony' where title = 'Opening';
 update public.event_photos set caption = 'Day one' where position = 0;
+select is((select count(*)::int from public.event_photos where caption = 'Day one' and updated_at = now()), 2,
+          'editing a Gallery photo records when it changed');
 select is((select count(*)::int from public.event_timeline_items where title = 'Opening ceremony')
           + (select count(*)::int from public.event_photos where caption = 'Day one'), 3,
           'an Administrator can edit Timeline items and Gallery photos');

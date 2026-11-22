@@ -37,6 +37,7 @@ The app talks to Supabase with the public anon key, so Row Level Security (RLS) 
 - Never store what can be derived. For example, Event timing (upcoming, ongoing, completed) follows from `starts_at` and `ends_at`, computed once in `event_listings`.
 - Use `timestamptz` for times and `uuid` primary keys from `gen_random_uuid()`.
 - Index every foreign key, and every column an RLS policy or a common query filters on. Use partial indexes for filtered lists (`where publish_status = 'published'`).
+- Under RLS, Postgres uses an index only for leakproof comparisons (`=`, `<`, `>` on text, numbers and timestamps). It can't use one for `ilike` or a function call (`private.event_year(starts_at) = 2026`). Check the plan as `anon` (`set local role anon; explain …`), not as `postgres`, which skips RLS.
 
 ### Storage
 
