@@ -21,7 +21,7 @@ Every agent follows [`docs/agents/workflow.md`](docs/agents/workflow.md). Read i
    - several sessions: `grill-with-docs`, then `to-spec`, then `to-tickets`, then `implement` for each ticket;
    - a bug: `diagnosing-bugs`;
    - someone else's raw issue: `triage`.
-2. **Verify** inside `gdgoc/`: `npm run lint` and `npm run build`. Add `npm test` once Vitest is set up.
+2. **Verify** inside `gdgoc/`: `npm run lint` and `npm run build`. If you changed `gdgoc/supabase/`, also run `npx supabase db reset`, `npx supabase test db` and `npx supabase db advisors --local` (needs Docker; see `gdgoc/supabase/README.md`). Add `npm test` once Vitest is set up.
 3. **Ship:** open a PR against the canonical `dev` (the `pr` skill writes the body), then run `retro` after larger builds.
 
 The skills are committed in `.agents/skills/` (Codex, OpenCode, Antigravity, Cursor, Copilot) and `.claude/skills/` (Claude Code), as two identical copies. [`docs/agents/workflow.md`](docs/agents/workflow.md) lists what each agent reads and how to work on a free tier. If your agent can't run skills, open `.agents/skills/<name>/SKILL.md` and follow it.
@@ -40,6 +40,7 @@ This site stores real students' data (names, emails, GDG IDs, campus and photos 
 ## Layout
 
 - `gdgoc/`: the Next.js app. **Run every npm command from here**, not from the repo root.
+- `gdgoc/supabase/`: database migrations, `seed.sql` (fake data only) and pgTAP tests. See its `README.md`.
 - `resource/documentation/`: planning and tech-stack docs (for reading only, not code). `PRD/NEW/` holds the current requirements; `PRD/OLD/` keeps earlier versions.
 - `CODING_STANDARDS.md`: the rules `code-review` enforces.
 - `docs/agents/`: the workflow, issue tracker, labels and domain-doc rules for agents.
@@ -58,9 +59,15 @@ npm install     # first time
 npm run dev     # dev server on http://localhost:3000
 npm run build   # production build: run this to check your changes
 npm run lint    # ESLint
+
+# database (needs Docker Desktop)
+npx supabase start               # local Supabase with migrations and seed.sql
+npx supabase db reset            # rebuild after changing a migration
+npx supabase test db             # pgTAP tests in supabase/tests/database/
+npx supabase db advisors --local # security and performance advisors
 ```
 
-There is no test suite yet.
+There is no app test suite yet. Database rules are tested with pgTAP (`npx supabase test db`).
 
 ## App structure (`gdgoc/src/app/`)
 
