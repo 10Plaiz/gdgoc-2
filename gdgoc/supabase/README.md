@@ -44,9 +44,11 @@ Migrations are grouped by feature (`CODING_STANDARDS.md`). Events spans four fil
   - Badge: `status_label` is `upcoming`, `registration_open`, `registration_closed`, `ongoing` or `completed`. Enable Register only when `registration_open` is true.
 - **Never compute timing in the app.** It lives in one place (`private.event_timing()`), so every page agrees. Every Event has a required `ends_at` after `starts_at`. It is ongoing from `starts_at` until `ends_at`, and completed from `ends_at` on. Register stays enabled while it is ongoing and closes when it ends (or earlier, at `registration_closes_at`).
 - **Featured event:** call `rpc('set_featured_event', { p_event_id })`, or pass `null` to clear it. Only a published Event can be featured; unpublishing or archiving the Featured event clears it.
-- **Images:** upload to `event-media` at `<event id>/<file>.webp` and store that path in `events.cover_path` or `event_photos.path`. The bucket is private, so show images with `createSignedUrl()`. Visitors get a URL only while the Event is published.
+- **Images:** save the Event first, then upload to `event-media` at `<event id>/<file>.webp` (uploads into a folder with no Event are refused) and store that path in `events.cover_path` or `event_photos.path`. The bucket is private, so show images with `createSignedUrl()`. Visitors get a URL only while the Event is published.
 - **Deleting an Event:** first remove its files with `storage.from('event-media').remove([...])` (list the `<event id>/` folder), then delete the row. The database refuses to delete an Event whose folder still has files, so nothing is left behind; its Timeline and Gallery rows go with it.
-- **Storage budget:** an Event's folder holds at most 21 files (the cover and 20 Gallery photos), counted from the files themselves. When replacing a cover or photo, upload over the same path, or remove the old file first.
+- **Deleting a Gallery photo:** remove its file too. Deleting the `event_photos` row leaves the file behind, still counting toward the folder's 21.
+- **Storage budget:** an Event's folder holds at most 21 files (the cover and 20 Gallery photos), counted from the files themselves. To replace a cover or photo, upload over the same path with `upsert: true`; that works even when the folder is full.
+  - **Upload one file at a time** (`await` each upload). The Storage API checks the cap before it writes, so uploads sent in parallel (`Promise.all`) can each pass and overfill the folder. The 20-row cap on `event_photos` holds either way.
 - **Times** are `timestamptz`. Show them in Philippine Standard Time (`Asia/Manila`).
 
 ## Data model and normalization
@@ -56,7 +58,7 @@ The tables are in third normal form, with a few deliberate exceptions:
 - **Derived values are computed, not stored.** Event timing, the status label, whether registration is open, and the year all come from `event_listings`.
 - **Storage paths repeat the Event id** (`events.cover_path`, `event_photos.path` = `<event id>/<file>`). The storage policies need the whole path in one string, and the website passes it straight to the Storage API. A check constraint (`private.event_media_owner(path) = event_id`) keeps the copy in step, so it can't drift.
 - **The cover image is a column, not a Gallery row.** Every Event has at most one cover, and it shows on cards before any Gallery exists.
-- **`Users.email` repeats `auth.users.email`.** It's the production table's existing shape (see below), kept so the current app keeps working.
+- **`Users.email` repeats `auth.users.email`.** It's the production table's existing shape (see below), kept so the current app keeps working. Each Member can edit their own copy, so never use it to identify someone for anything that matters; use `auth.users` (see "Make the first Administrator").
 - **Categories, Publish status and Registration status are `text` with a `check`,** not lookup tables or enums, so the lists are easy to change (`CODING_STANDARDS.md`).
 
 ## Rules for new migrations
@@ -71,13 +73,17 @@ The migrations have only run on local databases so far. Check these in the dashb
 - **`Users` policies:** handled. The migration drops every existing policy on `Users` before creating its own, so an older broad policy can't widen access.
 - **Email confirmation at sign-up:** the sign-up page inserts the `Users` row right after `auth.signUp()`, which needs a session at that moment, so email confirmation must stay off. Turning it on needs an app change: create the row from a trigger on `auth.users` instead.
 - **Old public `event-images` bucket:** handled. The migration makes it private if it exists, so draft posters stop being reachable by URL. Its files are kept; delete them from the dashboard once you've moved anything still needed.
+- **Storage policies:** check the existing policies on `storage.objects` (`select policyname, cmd, roles, qual, with_check from pg_policies where schemaname = 'storage' and tablename = 'objects';`). Policies are OR'd, so one that isn't limited to its own bucket (for example `using (true)`) also opens `event-media`, drafts included. Limit it with `bucket_id = '<its bucket>'` or drop it. The migration doesn't drop them for you, because other buckets (officer photos, shop) may depend on theirs.
 
 ## Make the first Administrator
 
 Members can't grant themselves the role. The project owner runs this once in the Supabase SQL editor, using the Member's sign-up email:
 
 ```sql
-update public."Users" set is_admin = true where email = '<member email>';
+update public."Users" set is_admin = true
+where user_id = (select id from auth.users where email = '<member email>');
 ```
+
+Match on `auth.users`, not `Users.email`: Members can edit their own `Users.email`, so a Member who copied the new officer's email onto their row would be promoted too.
 
 After that, Administrators grant and revoke the role from `/admin`.

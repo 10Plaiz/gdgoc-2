@@ -4,7 +4,7 @@
 begin;
 create extension if not exists pgtap with schema extensions;
 
-select plan(13);
+select plan(14);
 
 insert into auth.users (id, email, aud, role) values
   ('00000000-0000-0000-0000-00000000000a', 'admin@example.com',  'authenticated', 'authenticated'),
@@ -51,6 +51,12 @@ select throws_ok(
   $$ insert into public."Users" (user_id, first_name, last_name, email, is_admin)
      values ('00000000-0000-0000-0000-00000000000c', 'Jim', 'Doe', 'other@example.com', true) $$,
   '42501', null, 'a Member cannot sign up as an Administrator');
+
+select pg_temp.act_as('00000000-0000-0000-0000-00000000000b');
+select throws_ok(
+  $$ insert into public."Users" (user_id, first_name, last_name, email)
+     values ('00000000-0000-0000-0000-00000000000c', 'Jim', 'Doe', 'other@example.com') $$,
+  '42501', null, 'a Member cannot create a Users row for someone else');
 
 select pg_temp.act_as('00000000-0000-0000-0000-00000000000b');
 select throws_ok(

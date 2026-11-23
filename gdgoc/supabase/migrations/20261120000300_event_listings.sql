@@ -83,6 +83,8 @@ create view public.event_listings
 with (security_invoker = true)
 as
 select
+  -- Postgres expands e.* once, when the view is created. A migration that
+  -- adds a column to events must recreate this view, or the column won't show.
   e.*,
   private.event_timing(e, now())            as timing,
   private.event_status_label(e, now())      as status_label,

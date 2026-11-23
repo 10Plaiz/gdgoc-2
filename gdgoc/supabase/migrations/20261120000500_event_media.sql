@@ -53,10 +53,20 @@ grant execute on function private.event_media_has_event(text) to authenticated, 
 -- An Event's folder holds at most 21 files: the cover and the 20 Gallery
 -- photos event_photos allows. Files are counted, not rows, so files without a
 -- photo row (failed or abandoned uploads) still count against the folder.
--- The Storage API uploads one file per request, so the count sees every
--- earlier upload; a single multi-row SQL insert by service_role could pass it.
+--
+-- private.event_media_has_room(name, id): true when the file can land at
+-- `name` without the folder going over 21. It skips the file already at that
+-- path (an upsert replaces it) and the row being changed (a rename or move
+-- takes it out of its old place), so replacing or renaming inside a full
+-- folder still works.
+--
+-- A best-effort cap, not a hard one. The Storage API checks these policies in
+-- a transaction it rolls back, then writes the file separately, so uploads
+-- sent in parallel can each pass the check. The admin panel uploads one file
+-- at a time (README). A single multi-row SQL insert by service_role also skips
+-- it. The 20-photo cap on event_photos rows is the hard limit.
 -- ---------------------------------------------------------------------------
-create or replace function private.event_media_has_room(p_name text)
+create or replace function private.event_media_has_room(p_name text, p_id uuid)
 returns boolean
 language sql
 stable
@@ -66,11 +76,13 @@ as $$
   select count(*) < 21
   from storage.objects o
   where o.bucket_id = 'event-media'
-    and private.event_media_owner(o.name) = private.event_media_owner(p_name);
+    and private.event_media_owner(o.name) = private.event_media_owner(p_name)
+    and o.name <> p_name
+    and o.id is distinct from p_id;
 $$;
 
-revoke all on function private.event_media_has_room(text) from public;
-grant execute on function private.event_media_has_room(text) to authenticated, service_role;
+revoke all on function private.event_media_has_room(text, uuid) from public;
+grant execute on function private.event_media_has_room(text, uuid) to authenticated, service_role;
 
 -- One select policy for both roles, so Postgres evaluates a single policy per row.
 create policy "Anyone reads media of published Events; Administrators read all"
@@ -91,9 +103,10 @@ create policy "Administrators upload event media"
     bucket_id = 'event-media'
     and (select private.is_admin())
     and private.event_media_has_event(name)
-    and private.event_media_has_room(name)
+    and private.event_media_has_room(name, id)
   );
 
+-- Covers replacing a file and renaming or moving one (Storage API move()).
 create policy "Administrators replace event media"
   on storage.objects for update
   to authenticated
@@ -102,6 +115,7 @@ create policy "Administrators replace event media"
     bucket_id = 'event-media'
     and (select private.is_admin())
     and private.event_media_has_event(name)
+    and private.event_media_has_room(name, id)
   );
 
 create policy "Administrators delete event media"

@@ -5,7 +5,7 @@
 begin;
 create extension if not exists pgtap with schema extensions;
 
-select plan(30);
+select plan(34);
 
 -- ---------------------------------------------------------------------------
 -- Fixtures (as postgres, so no RLS and no website role).
@@ -99,10 +99,14 @@ select lives_ok(
      update public.events set publish_status = 'unpublished' where id = '10000000-0000-0000-0000-000000000006';
      update public.events set publish_status = 'archived' where id = '10000000-0000-0000-0000-000000000006' $$,
   'an Administrator can publish, unpublish and archive an Event');
+select is((select publish_status from public.events where id = '10000000-0000-0000-0000-000000000006'),
+          'archived', 'the Event ends up archived');
 
 select lives_ok(
   $$ delete from public.events where id = '10000000-0000-0000-0000-000000000006' $$,
   'an Administrator can delete an Event');
+select is((select count(*)::int from public.events where id = '10000000-0000-0000-0000-000000000006'),
+          0, 'the deleted Event is gone');
 
 -- ---------------------------------------------------------------------------
 -- Data rules
@@ -164,6 +168,13 @@ select lives_ok(
 select is((select array_agg(id) from public.events where is_featured),
           array['10000000-0000-0000-0000-000000000002'::uuid],
           'exactly the chosen Event is featured afterwards');
+
+select lives_ok(
+  $$ select public.set_featured_event(null) $$,
+  'an Administrator can clear the Featured event');
+select is((select count(*)::int from public.events where is_featured), 0,
+          'no Event is featured after clearing');
+select public.set_featured_event('10000000-0000-0000-0000-000000000002');  -- feature it again for the next test
 
 update public.events set publish_status = 'unpublished' where id = '10000000-0000-0000-0000-000000000002';
 select is((select count(*)::int from public.events where is_featured), 0,

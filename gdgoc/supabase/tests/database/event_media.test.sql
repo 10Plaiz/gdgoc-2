@@ -6,7 +6,7 @@
 begin;
 create extension if not exists pgtap with schema extensions;
 
-select plan(21);
+select plan(27);
 
 -- Supabase blocks direct SQL deletes on storage tables; allow them in this
 -- rolled-back transaction so the delete policies themselves are tested.
@@ -135,17 +135,52 @@ select is((select count(*)::int from storage.objects
 -- ---------------------------------------------------------------------------
 -- Storage budget: a capped folder per Event, and no files left behind
 -- ---------------------------------------------------------------------------
--- The draft Event's folder already holds its cover.
+-- The draft Event's folder already holds its cover. The Storage API writes one
+-- file per request, so each upload is its own statement: the room check can't
+-- see rows added earlier in the same statement.
 select lives_ok(
-  $$ insert into storage.objects (bucket_id, name)
-     select 'event-media', '40000000-0000-0000-0000-000000000002/photo-' || n || '.webp'
-     from generate_series(1, 20) n $$,
-  'an Event folder holds a cover and 20 Gallery photos');
+  $$ do $do$ begin
+       for n in 1..20 loop
+         insert into storage.objects (bucket_id, name)
+         values ('event-media', '40000000-0000-0000-0000-000000000002/photo-' || n || '.webp');
+       end loop;
+     end $do$ $$,
+  'an Event folder holds a cover and 20 Gallery photos, uploaded one by one');
 
 select throws_ok(
   $$ insert into storage.objects (bucket_id, name)
      values ('event-media', '40000000-0000-0000-0000-000000000002/photo-21.webp') $$,
   '42501', null, 'an Event folder cannot hold more than 21 files');
+
+-- Replacing a file (an upload with upsert) must pass the insert policy too.
+-- "on conflict do nothing" runs that check without naming a unique index,
+-- because storage.objects' indexes differ between Storage versions.
+select lives_ok(
+  $$ insert into storage.objects (bucket_id, name)
+     values ('event-media', '40000000-0000-0000-0000-000000000002/photo-1.webp')
+     on conflict do nothing $$,
+  'an Administrator can replace a file in a full folder');
+
+select lives_ok(
+  $$ update storage.objects set metadata = '{"replaced": true}'
+     where name = '40000000-0000-0000-0000-000000000002/photo-1.webp' $$,
+  'an Administrator can overwrite a file in a full folder');
+select is((select metadata ->> 'replaced' from storage.objects
+           where name = '40000000-0000-0000-0000-000000000002/photo-1.webp'), 'true',
+          'the overwritten file is updated');
+
+select lives_ok(
+  $$ update storage.objects set name = '40000000-0000-0000-0000-000000000002/photo-1b.webp'
+     where name = '40000000-0000-0000-0000-000000000002/photo-1.webp' $$,
+  'an Administrator can rename a file within a full folder');
+select is((select count(*)::int from storage.objects
+           where name = '40000000-0000-0000-0000-000000000002/photo-1b.webp'), 1,
+          'the renamed file is there');
+
+select throws_ok(
+  $$ update storage.objects set name = '40000000-0000-0000-0000-000000000002/moved.webp'
+     where name = '40000000-0000-0000-0000-000000000001/cover.webp' $$,
+  '42501', null, 'a file cannot be moved into a full folder');
 
 select throws_ok(
   $$ delete from public.events where id = '40000000-0000-0000-0000-000000000002' $$,
