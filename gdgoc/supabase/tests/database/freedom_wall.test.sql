@@ -5,7 +5,7 @@
 begin;
 create extension if not exists pgtap with schema extensions;
 
-select plan(10);
+select plan(11);
 
 insert into auth.users (id, email, aud, role) values
   ('00000000-0000-0000-0000-00000000000a', 'admin@example.com',  'authenticated', 'authenticated'),
@@ -73,9 +73,45 @@ select results_eq(
   $$ values ('Anonymous'::text, 'Hello wall'::text) $$,
   'a visitor sees the approved post with its author hidden');
 
+-- ---------------------------------------------------------------------------
+-- Moderation log (ADR 0007): every action writes exactly one row, with the
+-- account that acted.
+-- ---------------------------------------------------------------------------
 reset role;
-select is((select count(*)::int from public.freedom_wall_moderation_logs where action = 'approve'), 1,
-          'approving writes one moderation log row');
+select pg_temp.act_as('00000000-0000-0000-0000-00000000000a');
+select public.admin_edit_freedom_wall_submission(
+  (select submission_id from public.admin_list_freedom_wall_submissions('approved')), 'Edited wall', 'general');
+select public.admin_delete_freedom_wall_submission(
+  (select submission_id from public.admin_list_freedom_wall_submissions('approved')));
+
+reset role;
+select pg_temp.act_as('00000000-0000-0000-0000-00000000000b');
+select public.create_freedom_wall_submission('To be rejected', 'questions', false);
+reset role;
+select pg_temp.act_as('00000000-0000-0000-0000-00000000000a');
+select public.admin_reject_freedom_wall_submission(
+  (select submission_id from public.admin_list_freedom_wall_submissions('pending')), 'Off topic');
+
+reset role;
+select pg_temp.act_as('00000000-0000-0000-0000-00000000000b');
+select public.create_freedom_wall_submission('Mine to delete', 'general', false);
+select public.delete_my_freedom_wall_submission(
+  (select submission_id from public.get_my_freedom_wall_submissions() where status = 'pending'));
+
+reset role;
+select bag_eq(
+  $$ select action::text, actor_id from public.freedom_wall_moderation_logs $$,
+  $$ values ('approve',      '00000000-0000-0000-0000-00000000000a'::uuid),
+            ('edit',         '00000000-0000-0000-0000-00000000000a'::uuid),
+            ('admin_delete', '00000000-0000-0000-0000-00000000000a'::uuid),
+            ('reject',       '00000000-0000-0000-0000-00000000000a'::uuid),
+            ('member_delete','00000000-0000-0000-0000-00000000000b'::uuid) $$,
+  'each moderation action writes one log row with the account that acted');
+
+select is((select details->>'old_message' || ' -> ' || (details->>'new_message')
+           from public.freedom_wall_moderation_logs where action = 'edit'),
+          'Hello wall -> Edited wall',
+          'an edit keeps the text before and after');
 
 select * from finish();
 rollback;
