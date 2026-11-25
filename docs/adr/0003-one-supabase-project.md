@@ -1,5 +1,5 @@
 ---
-status: proposed
+status: accepted
 ---
 
 # One Supabase project for the whole site
