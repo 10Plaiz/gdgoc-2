@@ -132,7 +132,7 @@
 - A database rule limits each Member to one pending post.
 - Rejected posts are deleted 30 days after rejection by a scheduled job.
 - Members can delete their own posts at any time. Deleted posts leave the public feed at once.
-- **moderation_log:** append-only, written by triggers (ADR-0007).
+- **freedom_wall_moderation_logs:** append-only, written by the moderation functions (ADR-0007).
 - **wall_reactions:** one row per (post, Member, reaction type), five types.
 - **notifications:** `user_id`, `title`, `message`, `link`, `read_at`, created by a trigger when a post is approved or rejected.
 
