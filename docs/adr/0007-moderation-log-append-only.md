@@ -1,5 +1,5 @@
 ---
-status: proposed
+status: accepted
 ---
 
 # The moderation log is append-only
