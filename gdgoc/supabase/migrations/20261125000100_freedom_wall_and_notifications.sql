@@ -1,18 +1,10 @@
 -- ============================================================================
 -- Freedom Wall - Supabase / PostgreSQL migration
 --
--- EXPECTED EXISTING PROFILES TABLE:
---   public.profiles.profile_id UUID PRIMARY KEY (or UNIQUE)
---   public.profiles.display_name TEXT
---
--- EXPECTED AUTH LINK:
---   profiles.profile_id must equal auth.users.id (auth.uid()).
---
--- If your profiles table uses different names or data types, adjust the
--- references to profile_id and display_name before running this migration.
--- This migration does NOT create or modify public.profiles.
---
--- Apply this file once using the Supabase SQL Editor or Supabase CLI.
+-- Builds on the foundation (ADR 0008): Members are public."Users"(user_id),
+-- which equals auth.users.id, and Administrators are checked with
+-- private.is_admin(). The private schema and private.set_updated_at() come
+-- from the foundation migration.
 -- ============================================================================
 
 BEGIN;
@@ -62,7 +54,7 @@ CREATE TABLE public.freedom_wall_submissions (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
 
     author_id UUID NOT NULL
-        REFERENCES public.profiles(profile_id) ON DELETE CASCADE,
+        REFERENCES public."Users"(user_id) ON DELETE CASCADE,
 
     message TEXT NOT NULL,
     topic public.freedom_wall_topic NOT NULL,
@@ -109,7 +101,7 @@ COMMENT ON TABLE public.freedom_wall_submissions IS
 'All Freedom Wall submissions. Approved rows are the public posts; no separate posts table is needed.';
 
 COMMENT ON COLUMN public.freedom_wall_submissions.author_id IS
-'Always stores the real submitter profile, including for anonymous submissions. Do not expose this field through public APIs.';
+'Always stores the real submitter (Users.user_id), including for anonymous submissions. Do not expose this field through public APIs.';
 
 -- A member may have at most one pending submission at a time.
 CREATE UNIQUE INDEX freedom_wall_one_pending_per_member
@@ -139,7 +131,7 @@ CREATE TABLE public.freedom_wall_reactions (
         REFERENCES public.freedom_wall_submissions(id) ON DELETE CASCADE,
 
     user_id UUID NOT NULL
-        REFERENCES public.profiles(profile_id) ON DELETE CASCADE,
+        REFERENCES public."Users"(user_id) ON DELETE CASCADE,
 
     reaction_type public.freedom_wall_reaction_type NOT NULL,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
@@ -157,7 +149,7 @@ CREATE TABLE public.freedom_wall_moderation_logs (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     submission_id UUID NOT NULL,
     actor_id UUID
-        REFERENCES public.profiles(profile_id) ON DELETE SET NULL,
+        REFERENCES public."Users"(user_id) ON DELETE SET NULL,
     action public.freedom_wall_moderation_action NOT NULL,
     reason TEXT,
     details JSONB NOT NULL DEFAULT '{}'::JSONB,
@@ -170,14 +162,6 @@ CREATE INDEX freedom_wall_moderation_logs_submission_idx
 CREATE INDEX freedom_wall_moderation_logs_actor_idx
     ON public.freedom_wall_moderation_logs (actor_id, created_at DESC);
 
--- Admin allow-list for this feature. Add/remove rows using the SQL Editor.
--- This avoids assuming that your existing profiles table has a particular
--- admin/role column.
-CREATE TABLE public.freedom_wall_admins (
-    profile_id UUID PRIMARY KEY
-        REFERENCES public.profiles(profile_id) ON DELETE CASCADE,
-    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-);
 
 -- Generic per-user inbox. It is NOT Freedom Wall-specific.
 -- Examples of category values: 'freedom_wall', 'announcement', 'event', 'system'.
@@ -187,7 +171,7 @@ CREATE TABLE public.notifications (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
 
     recipient_id UUID NOT NULL
-        REFERENCES public.profiles(profile_id) ON DELETE CASCADE,
+        REFERENCES public."Users"(user_id) ON DELETE CASCADE,
 
     category TEXT NOT NULL,
     title TEXT NOT NULL,
@@ -220,36 +204,9 @@ CREATE INDEX notifications_recipient_unread_idx
 -- 3. PRIVATE HELPERS AND TRIGGERS
 -- ---------------------------------------------------------------------------
 
-CREATE SCHEMA IF NOT EXISTS private;
-REVOKE ALL ON SCHEMA private FROM PUBLIC;
 
 -- Used only by trusted database functions to verify an admin.
-CREATE OR REPLACE FUNCTION private.is_freedom_wall_admin()
-RETURNS BOOLEAN
-LANGUAGE SQL
-STABLE
-SECURITY DEFINER
-SET search_path = ''
-AS $$
-    SELECT EXISTS (
-        SELECT 1
-        FROM public.freedom_wall_admins AS a
-        WHERE a.profile_id = (SELECT auth.uid())
-    );
-$$;
 
-REVOKE ALL ON FUNCTION private.is_freedom_wall_admin() FROM PUBLIC;
-
-CREATE OR REPLACE FUNCTION private.set_updated_at()
-RETURNS TRIGGER
-LANGUAGE plpgsql
-SET search_path = ''
-AS $$
-BEGIN
-    NEW.updated_at := NOW();
-    RETURN NEW;
-END;
-$$;
 
 CREATE TRIGGER freedom_wall_submissions_set_updated_at
 BEFORE UPDATE ON public.freedom_wall_submissions
@@ -263,7 +220,6 @@ EXECUTE FUNCTION private.set_updated_at();
 ALTER TABLE public.freedom_wall_submissions ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.freedom_wall_reactions ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.freedom_wall_moderation_logs ENABLE ROW LEVEL SECURITY;
-ALTER TABLE public.freedom_wall_admins ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.notifications ENABLE ROW LEVEL SECURITY;
 
 -- No direct client access to the core Freedom Wall tables. Clients use the
@@ -272,7 +228,6 @@ ALTER TABLE public.notifications ENABLE ROW LEVEL SECURITY;
 REVOKE ALL ON TABLE public.freedom_wall_submissions FROM PUBLIC, anon, authenticated;
 REVOKE ALL ON TABLE public.freedom_wall_reactions FROM PUBLIC, anon, authenticated;
 REVOKE ALL ON TABLE public.freedom_wall_moderation_logs FROM PUBLIC, anon, authenticated;
-REVOKE ALL ON TABLE public.freedom_wall_admins FROM PUBLIC, anon, authenticated;
 
 -- Notifications are shared by multiple app features. A signed-in user can
 -- read their own inbox and update only read_at (not title/body/recipient).
@@ -342,7 +297,7 @@ BEGIN
         s.id AS submission_id,
         CASE
             WHEN s.is_anonymous THEN 'Anonymous'
-            ELSE COALESCE(p.display_name, 'Member')
+            ELSE COALESCE(NULLIF(BTRIM(p.first_name || ' ' || p.last_name), ''), 'Member')
         END AS author_label,
         s.topic,
         s.message,
@@ -360,8 +315,8 @@ BEGIN
             + COALESCE(r.tech_count, 0)
         )::BIGINT AS total_reactions
     FROM public.freedom_wall_submissions AS s
-    LEFT JOIN public.profiles AS p
-        ON p.profile_id = s.author_id
+    LEFT JOIN public."Users" AS p
+        ON p.user_id = s.author_id
     LEFT JOIN LATERAL (
         SELECT
             COUNT(*) FILTER (WHERE x.reaction_type = 'love') AS love_count,
@@ -624,7 +579,7 @@ SECURITY DEFINER
 SET search_path = ''
 AS $$
 BEGIN
-    IF NOT private.is_freedom_wall_admin() THEN
+    IF NOT private.is_admin() THEN
         RAISE EXCEPTION 'Administrator access required.';
     END IF;
 
@@ -632,8 +587,8 @@ BEGIN
     SELECT
         s.id,
         s.author_id,
-        COALESCE(p.display_name, 'Member'),
-        u.email,
+        COALESCE(NULLIF(BTRIM(p.first_name || ' ' || p.last_name), ''), 'Member'),
+        u.email::text,
         s.message,
         s.topic,
         s.is_anonymous,
@@ -644,8 +599,8 @@ BEGIN
         s.rejection_reason,
         s.updated_at
     FROM public.freedom_wall_submissions AS s
-    LEFT JOIN public.profiles AS p
-        ON p.profile_id = s.author_id
+    LEFT JOIN public."Users" AS p
+        ON p.user_id = s.author_id
     LEFT JOIN auth.users AS u
         ON u.id = s.author_id
     WHERE p_status IS NULL OR s.status = p_status
@@ -677,7 +632,7 @@ SECURITY DEFINER
 SET search_path = ''
 AS $$
 BEGIN
-    IF NOT private.is_freedom_wall_admin() THEN
+    IF NOT private.is_admin() THEN
         RAISE EXCEPTION 'Administrator access required.';
     END IF;
 
@@ -686,14 +641,14 @@ BEGIN
         l.id,
         l.submission_id,
         l.actor_id,
-        COALESCE(p.display_name, 'Former member'),
+        COALESCE(NULLIF(BTRIM(p.first_name || ' ' || p.last_name), ''), 'Former member'),
         l.action,
         l.reason,
         l.details,
         l.created_at
     FROM public.freedom_wall_moderation_logs AS l
-    LEFT JOIN public.profiles AS p
-        ON p.profile_id = l.actor_id
+    LEFT JOIN public."Users" AS p
+        ON p.user_id = l.actor_id
     WHERE p_submission_id IS NULL OR l.submission_id = p_submission_id
     ORDER BY l.created_at DESC
     LIMIT LEAST(GREATEST(COALESCE(p_limit, 100), 1), 500)
@@ -712,7 +667,7 @@ AS $$
 DECLARE
     v_author_id UUID;
 BEGIN
-    IF NOT private.is_freedom_wall_admin() THEN
+    IF NOT private.is_admin() THEN
         RAISE EXCEPTION 'Administrator access required.';
     END IF;
 
@@ -769,7 +724,7 @@ DECLARE
     v_author_id UUID;
     v_reason TEXT := NULLIF(BTRIM(p_rejection_reason), '');
 BEGIN
-    IF NOT private.is_freedom_wall_admin() THEN
+    IF NOT private.is_admin() THEN
         RAISE EXCEPTION 'Administrator access required.';
     END IF;
 
@@ -833,7 +788,7 @@ DECLARE
     v_old_message TEXT;
     v_old_topic public.freedom_wall_topic;
 BEGIN
-    IF NOT private.is_freedom_wall_admin() THEN
+    IF NOT private.is_admin() THEN
         RAISE EXCEPTION 'Administrator access required.';
     END IF;
 
@@ -891,7 +846,7 @@ AS $$
 DECLARE
     v_submission public.freedom_wall_submissions%ROWTYPE;
 BEGIN
-    IF NOT private.is_freedom_wall_admin() THEN
+    IF NOT private.is_admin() THEN
         RAISE EXCEPTION 'Administrator access required.';
     END IF;
 
@@ -1016,7 +971,7 @@ GRANT EXECUTE ON FUNCTION public.list_freedom_wall_posts(
     public.freedom_wall_topic, TEXT, TEXT, INTEGER, INTEGER
 ) TO anon, authenticated;
 
--- Member operations require authentication. Admin RPCs also check the allow-list.
+-- Member operations require authentication. Admin RPCs also check private.is_admin().
 GRANT EXECUTE ON FUNCTION public.get_my_freedom_wall_submissions() TO authenticated;
 GRANT EXECUTE ON FUNCTION public.create_freedom_wall_submission(
     TEXT, public.freedom_wall_topic, BOOLEAN
@@ -1063,16 +1018,5 @@ SELECT cron.schedule(
 );
 
 -- ---------------------------------------------------------------------------
--- 10. FIRST ADMIN SETUP (RUN MANUALLY AFTER THE MIGRATION)
+-- Administrators: see "Make the first Administrator" in supabase/README.md.
 -- ---------------------------------------------------------------------------
--- Replace the UUID below with the profile_id/auth.users.id of an administrator.
--- Run this separately in the Supabase SQL Editor:
---
--- INSERT INTO public.freedom_wall_admins (profile_id)
--- VALUES ('00000000-0000-0000-0000-000000000000');
---
--- To remove an administrator:
--- DELETE FROM public.freedom_wall_admins
--- WHERE profile_id = '00000000-0000-0000-0000-000000000000';
---
--- Only trusted project administrators should be able to edit this allow-list.

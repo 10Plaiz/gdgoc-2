@@ -4,18 +4,10 @@ This migration adds the database functionality for the Freedom Wall feature. It 
 
 ## Requirements
 
-The project must already have `public.profiles` with:
+This migration builds on the database foundation (ADR 0008), which must be applied first:
 
-- `profile_id UUID`, matching `auth.users.id`
-- `display_name TEXT`
-
-The migration does not create or modify `profiles` or Supabase Auth. Check the existing columns before applying it:
-
-```sql
-SELECT column_name, data_type
-FROM information_schema.columns
-WHERE table_schema = 'public' AND table_name = 'profiles';
-```
+- Members are rows in `public."Users"`, keyed by `user_id` (equal to `auth.users.id`). The public feed shows `first_name last_name` as the author.
+- Administrators are Members with `Users.is_admin = true`, checked with `private.is_admin()`. The same Administrators manage Events.
 
 ## What the migration creates
 
@@ -24,7 +16,6 @@ WHERE table_schema = 'public' AND table_name = 'profiles';
 | `freedom_wall_submissions` | Stores submissions through pending, approved, and rejected states. An approved submission is the public post; there is no separate posts table. |
 | `freedom_wall_reactions` | Stores one reaction per member per submission. |
 | `freedom_wall_moderation_logs` | Records moderation and deletion actions, including the moderator. |
-| `freedom_wall_admins` | Allow-list of accounts permitted to use admin RPC functions. |
 | `notifications` | Shared per-user inbox for Freedom Wall, announcements, events, and other app features. |
 
 It also creates topic/status/reaction/action enums, indexes, RLS policies, an `updated_at` trigger, RPC functions, and an hourly cleanup job.
@@ -33,26 +24,20 @@ The public feed is served through an RPC, not direct table access. It returns ap
 
 ## Apply the migration
 
-Place `20261125000100_freedom_wall.sql` in `supabase/migrations/` and run:
+From `gdgoc/`, rebuild the local database and run the tests:
 
 ```bash
-supabase db push
+npx supabase db reset
+npx supabase test db
 ```
 
-Alternatively, run the SQL file in the Supabase Dashboard's SQL Editor. Apply and test it in a development project before production.
+Apply it to the hosted project only after it is merged, with the other migrations.
 
-After applying it, add administrators to the allow-list from the SQL Editor:
-
-```sql
-INSERT INTO public.freedom_wall_admins (profile_id)
-VALUES ('ADMIN-PROFILE-UUID');
-```
-
-Only trusted project administrators should be able to change this table.
+To make someone an Administrator, follow "Make the first Administrator" in `supabase/README.md`. After that, Administrators grant the role from `/admin`.
 
 ## Calling the RPC functions
 
-Use `supabase.rpc(function_name, parameters)` from the Supabase client. The caller must be signed in for member and admin operations. Admin RPCs also verify membership in `freedom_wall_admins`.
+Use `supabase.rpc(function_name, parameters)` from the Supabase client. The caller must be signed in for member and admin operations. Admin RPCs also check that the caller is an Administrator (`private.is_admin()`).
 
 ### Public feed
 
@@ -102,7 +87,7 @@ The database enforces the 2,000-character limit, non-empty messages, required to
 
 ### Admin moderation
 
-All admin functions require the caller to be listed in `freedom_wall_admins`.
+All admin functions require the caller to be an Administrator (`Users.is_admin`).
 
 ```js
 // List submissions. Use 'pending', 'approved', 'rejected', or null for all.
