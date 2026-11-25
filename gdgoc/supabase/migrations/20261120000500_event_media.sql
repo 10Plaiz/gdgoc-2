@@ -60,9 +60,10 @@ grant execute on function private.event_media_has_event(text) to authenticated, 
 -- takes it out of its old place), so replacing or renaming inside a full
 -- folder still works.
 --
--- A best-effort cap, not a hard one. The Storage API checks these policies in
--- a transaction it rolls back, then writes the file separately, so uploads
--- sent in parallel can each pass the check. The admin panel uploads one file
+-- A best-effort cap, not a hard one. The Storage API checks these policies
+-- before it writes and, from storage-api v1.81.0, again inside the write's own
+-- transaction. Neither check locks the folder, so two uploads sent at the same
+-- moment can each count 20 files and both pass. The admin panel uploads one file
 -- at a time (README). A single multi-row SQL insert by service_role also skips
 -- it. The 20-photo cap on event_photos rows is the hard limit.
 -- ---------------------------------------------------------------------------

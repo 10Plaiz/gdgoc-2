@@ -40,7 +40,7 @@ Migrations are grouped by feature (`CODING_STANDARDS.md`). Events spans four fil
   - Coming Soon: `timing in ('upcoming', 'ongoing')`, ordered by `starts_at` ascending.
   - Previous Events: `timing = 'completed'`, ordered by `starts_at` descending, filtered by `category`, searched with `title ilike '%term%'`.
   - Year filter: a Philippine-time range on `starts_at`, for example `starts_at >= '2026-01-01T00:00:00+08:00'` and `< '2027-01-01T00:00:00+08:00'`. `event_year` is for display and grouping. Under RLS, Postgres can only use an index for leakproof comparisons, which a timestamp range is and `event_year = 2026` isn't.
-  - Public lists add `publish_status = 'published'` (`.eq('publish_status', 'published')`). RLS already hides drafts, but the indexes are partial and only get used when the query states that filter.
+  - Public lists must add `publish_status = 'published'` (`.eq('publish_status', 'published')`). RLS hides drafts from visitors and Members only: an Administrator sees every Event, so without this filter a signed-in Administrator would see drafts, unpublished and archived Events on the public page. The filter also lets the partial indexes be used.
   - Badge: `status_label` is `upcoming`, `registration_open`, `registration_closed`, `ongoing` or `completed`. Enable Register only when `registration_open` is true.
 - **Never compute timing in the app.** It lives in one place (`private.event_timing()`), so every page agrees. Every Event has a required `ends_at` after `starts_at`. It is ongoing from `starts_at` until `ends_at`, and completed from `ends_at` on. Register stays enabled while it is ongoing and closes when it ends (or earlier, at `registration_closes_at`).
 - **Featured event:** call `rpc('set_featured_event', { p_event_id })`, or pass `null` to clear it. Only a published Event can be featured; unpublishing or archiving the Featured event clears it.
@@ -48,7 +48,7 @@ Migrations are grouped by feature (`CODING_STANDARDS.md`). Events spans four fil
 - **Deleting an Event:** first remove its files with `storage.from('event-media').remove([...])` (list the `<event id>/` folder), then delete the row. The database refuses to delete an Event whose folder still has files, so nothing is left behind; its Timeline and Gallery rows go with it.
 - **Deleting a Gallery photo:** remove its file too. Deleting the `event_photos` row leaves the file behind, still counting toward the folder's 21.
 - **Storage budget:** an Event's folder holds at most 21 files (the cover and 20 Gallery photos), counted from the files themselves. To replace a cover or photo, upload over the same path with `upsert: true`; that works even when the folder is full.
-  - **Upload one file at a time** (`await` each upload). The Storage API checks the cap before it writes, so uploads sent in parallel (`Promise.all`) can each pass and overfill the folder. The 20-row cap on `event_photos` holds either way.
+  - **Upload one file at a time** (`await` each upload). The Storage API checks the cap before the write and (from storage-api v1.81.0) inside it, but neither check locks the folder, so uploads sent in parallel (`Promise.all`) can each pass and overfill the folder. The 20-row cap on `event_photos` holds either way.
 - **Times** are `timestamptz`. Show them in Philippine Standard Time (`Asia/Manila`).
 
 ## Data model and normalization
