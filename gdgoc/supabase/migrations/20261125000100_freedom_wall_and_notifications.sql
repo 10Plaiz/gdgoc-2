@@ -940,31 +940,32 @@ $$;
 -- 8. RPC EXECUTE PRIVILEGES
 -- ---------------------------------------------------------------------------
 
--- Remove PostgreSQL's default PUBLIC execute permission from these functions.
+-- Remove the default execute grants: PostgreSQL gives every new function to
+-- PUBLIC, and Supabase also grants functions in public to anon directly.
 REVOKE ALL ON FUNCTION public.list_freedom_wall_posts(
     public.freedom_wall_topic, TEXT, TEXT, INTEGER, INTEGER
-) FROM PUBLIC;
-REVOKE ALL ON FUNCTION public.get_my_freedom_wall_submissions() FROM PUBLIC;
+) FROM PUBLIC, anon;
+REVOKE ALL ON FUNCTION public.get_my_freedom_wall_submissions() FROM PUBLIC, anon;
 REVOKE ALL ON FUNCTION public.create_freedom_wall_submission(
     TEXT, public.freedom_wall_topic, BOOLEAN
-) FROM PUBLIC;
-REVOKE ALL ON FUNCTION public.delete_my_freedom_wall_submission(UUID) FROM PUBLIC;
+) FROM PUBLIC, anon;
+REVOKE ALL ON FUNCTION public.delete_my_freedom_wall_submission(UUID) FROM PUBLIC, anon;
 REVOKE ALL ON FUNCTION public.set_freedom_wall_reaction(
     UUID, public.freedom_wall_reaction_type
-) FROM PUBLIC;
-REVOKE ALL ON FUNCTION public.remove_my_freedom_wall_reaction(UUID) FROM PUBLIC;
+) FROM PUBLIC, anon;
+REVOKE ALL ON FUNCTION public.remove_my_freedom_wall_reaction(UUID) FROM PUBLIC, anon;
 REVOKE ALL ON FUNCTION public.admin_list_freedom_wall_submissions(
     public.freedom_wall_submission_status, INTEGER, INTEGER
-) FROM PUBLIC;
-REVOKE ALL ON FUNCTION public.admin_list_freedom_wall_moderation_logs(UUID, INTEGER, INTEGER) FROM PUBLIC;
-REVOKE ALL ON FUNCTION public.admin_approve_freedom_wall_submission(UUID) FROM PUBLIC;
-REVOKE ALL ON FUNCTION public.admin_reject_freedom_wall_submission(UUID, TEXT) FROM PUBLIC;
+) FROM PUBLIC, anon;
+REVOKE ALL ON FUNCTION public.admin_list_freedom_wall_moderation_logs(UUID, INTEGER, INTEGER) FROM PUBLIC, anon;
+REVOKE ALL ON FUNCTION public.admin_approve_freedom_wall_submission(UUID) FROM PUBLIC, anon;
+REVOKE ALL ON FUNCTION public.admin_reject_freedom_wall_submission(UUID, TEXT) FROM PUBLIC, anon;
 REVOKE ALL ON FUNCTION public.admin_edit_freedom_wall_submission(
     UUID, TEXT, public.freedom_wall_topic
-) FROM PUBLIC;
-REVOKE ALL ON FUNCTION public.admin_delete_freedom_wall_submission(UUID) FROM PUBLIC;
-REVOKE ALL ON FUNCTION public.mark_notification_read(UUID) FROM PUBLIC;
-REVOKE ALL ON FUNCTION public.mark_all_notifications_read() FROM PUBLIC;
+) FROM PUBLIC, anon;
+REVOKE ALL ON FUNCTION public.admin_delete_freedom_wall_submission(UUID) FROM PUBLIC, anon;
+REVOKE ALL ON FUNCTION public.mark_notification_read(UUID) FROM PUBLIC, anon;
+REVOKE ALL ON FUNCTION public.mark_all_notifications_read() FROM PUBLIC, anon;
 
 -- Public feed can be called by visitors and signed-in members.
 GRANT EXECUTE ON FUNCTION public.list_freedom_wall_posts(

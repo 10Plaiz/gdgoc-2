@@ -172,3 +172,4 @@ LIMIT 20;
 - Use a textarea and enforce the 2,000-character limit in the UI as well as in the database.
 - Do not expose the underlying submissions table directly to the public feed. Use `list_freedom_wall_posts`.
 - Handle RPC errors in the UI, including the one-pending-submission constraint.
+- Visitors (signed out) can call only `list_freedom_wall_posts`. Every other RPC returns a permission error until the user signs in.

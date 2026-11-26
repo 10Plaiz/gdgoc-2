@@ -5,7 +5,7 @@
 begin;
 create extension if not exists pgtap with schema extensions;
 
-select plan(11);
+select plan(13);
 
 insert into auth.users (id, email, aud, role) values
   ('00000000-0000-0000-0000-00000000000a', 'admin@example.com',  'authenticated', 'authenticated'),
@@ -72,6 +72,24 @@ select results_eq(
   $$ select author_label, message from public.list_freedom_wall_posts() $$,
   $$ values ('Anonymous'::text, 'Hello wall'::text) $$,
   'a visitor sees the approved post with its author hidden');
+
+select throws_ok(
+  $$ select * from public.admin_list_freedom_wall_submissions() $$,
+  '42501', null, 'a visitor cannot call the moderation functions at all');
+
+-- Supabase grants every new function in public to anon by default, so a
+-- migration must revoke it from anon explicitly. Only the public feed may
+-- reach visitors; add a function here only if visitors should call it.
+select is(
+  (select array_agg(p.proname::text order by p.proname::text)
+   from pg_proc p
+   join pg_namespace n on n.oid = p.pronamespace
+   where n.nspname = 'public'
+     and has_function_privilege('anon', p.oid, 'execute')
+     and not exists (select 1 from pg_depend d
+                     where d.objid = p.oid and d.deptype = 'e')),
+  array['list_freedom_wall_posts'],
+  'visitors can run only the functions meant for them');
 
 -- ---------------------------------------------------------------------------
 -- Moderation log (ADR 0007): every action writes exactly one row, with the
