@@ -19,7 +19,7 @@ The app talks to Supabase with the public anon key, so Row Level Security (RLS) 
 - Wrap auth helpers in policies as `(select auth.uid())` and `(select private.is_admin())`, so Postgres evaluates them once per query instead of once per row.
 - Give each policy a `to` role (`anon`, `authenticated`) and one command (`select`, `insert`, `update`, `delete`). Avoid `for all`.
 - Grant table privileges explicitly (`grant select ... to anon, authenticated`). Grant only what a policy allows.
-- No policy gives the public `select` on a Submission base table; public reads go through views that hide the author (ADR-0002).
+- No policy gives the public `select` on a Submission base table; public reads go through a view or a function that hides the author (ADR-0002).
 - No policy lets a Member read other Members' `Users` rows; the directory goes through the `member_directory` view, which never includes the GDG ID (ADR-0006).
 - RLS can't restrict single columns. Protect a privileged column (`is_admin`, `status`) with a trigger, and check the real role with `current_user`, not a JWT claim.
 

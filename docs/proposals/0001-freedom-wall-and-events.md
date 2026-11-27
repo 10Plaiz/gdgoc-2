@@ -139,7 +139,7 @@
 **Anonymous** (ADR-0002)
 
 - `author_id` is always stored.
-- The public reads Wall Posts only through the `public_wall_posts` view, which returns approved rows and blanks out the author when `is_anonymous` is set.
+- The public reads Wall Posts only through the `list_freedom_wall_posts()` function, which returns approved posts and shows `Anonymous` as the author when `is_anonymous` is set.
 - The base table can be read only by the author and Administrators.
 
 **Storage** (Free Plan: 1 GB of files and 5 GB of downloads per month, shared across the organisation)
