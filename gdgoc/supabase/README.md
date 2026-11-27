@@ -4,7 +4,7 @@ Every change to the database is a migration in `migrations/`, so the database ca
 
 ## Run it locally
 
-Needs Docker Desktop running. From `gdgoc/`:
+Needs Docker (Docker Desktop on Mac/Windows, Docker Engine on Linux) running. From `gdgoc/`:
 
 ```bash
 npx supabase start               # local Postgres, Auth, Storage and API; applies migrations and seed.sql
@@ -27,7 +27,7 @@ These two migrations come before any feature. Feature migrations use what they c
 | Migration | Adds |
 | --- | --- |
 | `…_foundation.sql` | `private` schema, the shared `set_updated_at()` trigger, `private.is_public()` (which Publish status is public) |
-| `…_administrators.sql` | `Users` baseline and RLS, `private.is_admin()`, a trigger so only Administrators can change `is_admin` |
+| `…_administrators.sql` | `Users` baseline and RLS, the sign-up trigger that creates each Member's `Users` row, `private.is_admin()`, a trigger so only Administrators can change `is_admin` |
 
 When you write a feature migration:
 
@@ -41,9 +41,15 @@ When you write a feature migration:
 
 The migrations have only run on local databases so far. Check these in the dashboard first. The project is being recreated under an organisation account (PRD §5.5), and a fresh project avoids most of them.
 
-- **`Users` columns:** the table already exists in production. `…_administrators.sql` assumes it has the columns listed there, with `is_admin` a boolean.
-- **`Users` policies:** handled. The migration drops every existing policy on `Users` before creating its own, so an older broad policy can't widen access.
-- **Email confirmation at sign-up:** the sign-up page inserts the `Users` row right after `auth.signUp()`, which needs a session at that moment, so email confirmation must stay off. Turning it on needs an app change: create the row from a trigger on `auth.users` instead.
+- **`Users` columns:** the table already exists in production. `…_administrators.sql` stops with an error if it lacks a column the app uses or `is_admin` isn't a boolean. It also clears blank GDG IDs to NULL and adds a unique constraint on `gdg_id`, which fails if two rows share a real one; clean those up first.
+- **`Users` policies:** the migration drops every live policy on `Users` before creating its own, so an older broad policy can't widen access. Unless this is the fresh project from PRD §5.5, dump them first and keep the output:
+
+  ```sql
+  select policyname, cmd, roles, qual, with_check
+  from pg_policies where schemaname = 'public' and tablename = 'Users';
+  ```
+
+- **Email confirmation:** leave it on (hosted projects start with it on). Sign-up doesn't need a session: a trigger on `auth.users` creates the `Users` row from the sign-up form. Users created from the dashboard get a row too, with blank names. If the live project already has a trigger on `auth.users` that creates `Users` rows, drop it, or every sign-up fails on the duplicate row.
 
 ## Make the first Administrator
 
@@ -54,6 +60,6 @@ update public."Users" set is_admin = true
 where user_id = (select id from auth.users where email = '<member email>');
 ```
 
-Match on `auth.users`, not `Users.email`: Members can edit their own `Users.email`, so a Member who copied the new officer's email onto their row would be promoted too.
+Match on `auth.users`, which holds the Member's current sign-in email. `Users.email` is the copy made at sign-up: Members can't edit it, but it doesn't follow a later email change.
 
 After that, Administrators grant and revoke the role from `/admin`.
