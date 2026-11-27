@@ -7,13 +7,15 @@ create extension if not exists pgtap with schema extensions;
 
 select plan(17);
 
-insert into auth.users (id, email, aud, role) values
-  ('00000000-0000-0000-0000-00000000000a', 'admin@example.com',  'authenticated', 'authenticated'),
-  ('00000000-0000-0000-0000-00000000000b', 'member@example.com', 'authenticated', 'authenticated');
+-- Signing up creates each Users row (foundation trigger); the owner then
+-- makes the first Administrator.
+insert into auth.users (id, email, aud, role, raw_user_meta_data) values
+  ('00000000-0000-0000-0000-00000000000a', 'admin@example.com',  'authenticated', 'authenticated',
+   '{"first_name": "Jane", "last_name": "Doe"}'),
+  ('00000000-0000-0000-0000-00000000000b', 'member@example.com', 'authenticated', 'authenticated',
+   '{"first_name": "John", "last_name": "Doe"}');
 
-insert into public."Users" (user_id, first_name, last_name, email, is_admin) values
-  ('00000000-0000-0000-0000-00000000000a', 'Jane', 'Doe', 'admin@example.com',  true),
-  ('00000000-0000-0000-0000-00000000000b', 'John', 'Doe', 'member@example.com', false);
+update public."Users" set is_admin = true where user_id = '00000000-0000-0000-0000-00000000000a';
 
 create function pg_temp.act_as(p_user uuid) returns void language sql as $$
   select set_config('request.jwt.claims', json_build_object('sub', p_user, 'role', 'authenticated')::text, true);
