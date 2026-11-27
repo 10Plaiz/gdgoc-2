@@ -14,11 +14,11 @@ This migration builds on the database foundation (ADR 0008), which must be appli
 | Database object | Purpose |
 |---|---|
 | `freedom_wall_submissions` | Stores submissions through pending, approved, and rejected states. An approved submission is the public post; there is no separate posts table. |
-| `freedom_wall_reactions` | Stores one reaction per member per submission. |
-| `freedom_wall_moderation_logs` | Records moderation and deletion actions, including the moderator. |
+| `freedom_wall_reactions` | Stores reactions: one row per submission, member, and reaction type. |
+| `freedom_wall_moderation_logs` | Records moderation and deletion actions, including the moderator. It never stores a post's message or its author. |
 | `notifications` | Shared per-user inbox for Freedom Wall, announcements, events, and other app features. |
 
-It also creates topic/status/reaction/action enums, indexes, RLS policies, an `updated_at` trigger, RPC functions, and an hourly cleanup job.
+It also creates status, reaction, and action enums, indexes, RLS policies, an `updated_at` trigger, RPC functions, and an hourly cleanup job. Topic is a `text` column with a `CHECK` constraint instead of an enum, so adding a topic changes one constraint and needs no `ALTER TYPE`.
 
 The public feed is served through an RPC, not direct table access. It returns approved posts and safe display fields only. Anonymous posts return `author_label = 'Anonymous'`; the public response does not include the real author ID or anonymity flag.
 
@@ -71,19 +71,20 @@ await supabase.rpc('delete_my_freedom_wall_submission', {
   p_submission_id: submissionId,
 });
 
-// Add or change the signed-in member's reaction.
+// Add one reaction type from the signed-in member.
 await supabase.rpc('set_freedom_wall_reaction', {
   p_submission_id: submissionId,
   p_reaction_type: 'love', // love, ship_it, lit, relatable, tech
 });
 
-// Remove the signed-in member's reaction.
+// Remove one reaction type the signed-in member gave.
 await supabase.rpc('remove_my_freedom_wall_reaction', {
   p_submission_id: submissionId,
+  p_reaction_type: 'love',
 });
 ```
 
-The database enforces the 2,000-character limit, non-empty messages, required topics, and at most one pending submission per member. Reactions are limited to one per member per post; setting another reaction replaces the existing one.
+The database enforces the 2,000-character limit, non-empty messages, known topics, and at most one pending submission per member. A member can give each of the five reaction types once per post. Giving the same type again does nothing.
 
 ### Admin moderation
 
@@ -124,6 +125,10 @@ await supabase.rpc('admin_list_freedom_wall_moderation_logs', {
 ```
 
 Approval and rejection each update the submission, create a moderation log, and create a notification in one transaction. Rejection requires a reason. Admin edits preserve the original author and anonymity setting.
+
+Administrators can edit approved posts only. To fix a typo in a pending post, reject it with a reason, or approve it and then edit it.
+
+The moderation log outlives the posts it describes, so it never stores a post's message or its author. Each row keeps the action, the time, and the Administrator who acted. An edit row also keeps the old and new topic, and a rejection row keeps the reason. When a member deletes their own post, the row has no moderator (`moderator_id` is `null`, and `moderator_display_name` is `Author`).
 
 ## Notifications
 

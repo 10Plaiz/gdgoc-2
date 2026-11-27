@@ -5,7 +5,7 @@
 begin;
 create extension if not exists pgtap with schema extensions;
 
-select plan(13);
+select plan(17);
 
 insert into auth.users (id, email, aud, role) values
   ('00000000-0000-0000-0000-00000000000a', 'admin@example.com',  'authenticated', 'authenticated'),
@@ -24,6 +24,10 @@ $$;
 -- Member
 -- ---------------------------------------------------------------------------
 select pg_temp.act_as('00000000-0000-0000-0000-00000000000b');
+
+select throws_ok(
+  $$ select public.create_freedom_wall_submission('Hello wall', 'gossip', true) $$,
+  '23514', null, 'an unknown Topic is refused');
 
 select lives_ok(
   $$ select public.create_freedom_wall_submission('Hello wall', 'general', true) $$,
@@ -92,8 +96,35 @@ select is(
   'visitors can run only the functions meant for them');
 
 -- ---------------------------------------------------------------------------
+-- Reactions: a Member gives each type at most once per post
+-- ---------------------------------------------------------------------------
+reset role;
+select pg_temp.act_as('00000000-0000-0000-0000-00000000000b');
+select public.set_freedom_wall_reaction((select submission_id from public.list_freedom_wall_posts()), 'love');
+select public.set_freedom_wall_reaction((select submission_id from public.list_freedom_wall_posts()), 'lit');
+
+select results_eq(
+  $$ select love_count, lit_count from public.list_freedom_wall_posts() $$,
+  $$ values (1::bigint, 1::bigint) $$,
+  'two different Reactions from one Member on one post both count');
+
+select public.set_freedom_wall_reaction((select submission_id from public.list_freedom_wall_posts()), 'love');
+
+select results_eq(
+  $$ select love_count, total_reactions from public.list_freedom_wall_posts() $$,
+  $$ values (1::bigint, 2::bigint) $$,
+  'the same Reaction given twice counts once');
+
+select public.remove_my_freedom_wall_reaction((select submission_id from public.list_freedom_wall_posts()), 'love');
+
+select results_eq(
+  $$ select love_count, lit_count from public.list_freedom_wall_posts() $$,
+  $$ values (0::bigint, 1::bigint) $$,
+  'removing one Reaction leaves the other');
+
+-- ---------------------------------------------------------------------------
 -- Moderation log (ADR 0007): every action writes exactly one row, with the
--- account that acted.
+-- Administrator who acted. A deleted post's text and author leave no trace.
 -- ---------------------------------------------------------------------------
 reset role;
 select pg_temp.act_as('00000000-0000-0000-0000-00000000000a');
@@ -123,13 +154,19 @@ select bag_eq(
             ('edit',         '00000000-0000-0000-0000-00000000000a'::uuid),
             ('admin_delete', '00000000-0000-0000-0000-00000000000a'::uuid),
             ('reject',       '00000000-0000-0000-0000-00000000000a'::uuid),
-            ('member_delete','00000000-0000-0000-0000-00000000000b'::uuid) $$,
-  'each moderation action writes one log row with the account that acted');
+            ('member_delete', null::uuid) $$,
+  'each moderation action writes one log row, with the Administrator who acted (none when a Member deletes their own post)');
 
-select is((select details->>'old_message' || ' -> ' || (details->>'new_message')
-           from public.freedom_wall_moderation_logs where action = 'edit'),
-          'Hello wall -> Edited wall',
-          'an edit keeps the text before and after');
+-- Every column of every log row about a deleted post, as text.
+select results_eq(
+  $$ select count(*)::int,
+            count(*) filter (
+              where l::text ~ 'Hello wall|Edited wall|Mine to delete|00000000-0000-0000-0000-00000000000b')::int
+     from public.freedom_wall_moderation_logs as l
+     where not exists (select 1 from public.freedom_wall_submissions as s
+                       where s.id = l.submission_id) $$,
+  $$ values (4, 0) $$,
+  'after a Member or an Administrator deletes a post, none of its 4 log rows holds its text or its author');
 
 select * from finish();
 rollback;

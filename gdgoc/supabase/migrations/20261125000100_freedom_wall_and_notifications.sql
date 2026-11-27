@@ -13,15 +13,6 @@ BEGIN;
 -- 1. ENUMS
 -- ---------------------------------------------------------------------------
 
-CREATE TYPE public.freedom_wall_topic AS ENUM (
-    'general',
-    'project_collaboration',
-    'tech_tips',
-    'hackathon',
-    'shoutout',
-    'questions'
-);
-
 CREATE TYPE public.freedom_wall_submission_status AS ENUM (
     'pending',
     'approved',
@@ -57,7 +48,7 @@ CREATE TABLE public.freedom_wall_submissions (
         REFERENCES public."Users"(user_id) ON DELETE CASCADE,
 
     message TEXT NOT NULL,
-    topic public.freedom_wall_topic NOT NULL,
+    topic TEXT NOT NULL,
     is_anonymous BOOLEAN NOT NULL DEFAULT FALSE,
     status public.freedom_wall_submission_status NOT NULL DEFAULT 'pending',
 
@@ -70,6 +61,18 @@ CREATE TABLE public.freedom_wall_submissions (
     CONSTRAINT freedom_wall_message_length_and_content CHECK (
         char_length(message) <= 2000
         AND char_length(btrim(message)) > 0
+    ),
+
+    -- A CHECK, not an enum, so adding a topic later needs no ALTER TYPE.
+    CONSTRAINT freedom_wall_submissions_topic_valid CHECK (
+        topic IN (
+            'general',
+            'project_collaboration',
+            'tech_tips',
+            'hackathon',
+            'shoutout',
+            'questions'
+        )
     ),
 
     -- Keep the timestamps/reason consistent with the status.
@@ -115,6 +118,11 @@ CREATE INDEX freedom_wall_submissions_approved_at_idx
     ON public.freedom_wall_submissions (approved_at DESC)
     WHERE status = 'approved';
 
+-- Used by the public feed when it filters by topic.
+CREATE INDEX freedom_wall_submissions_topic_approved_at_idx
+    ON public.freedom_wall_submissions (topic, approved_at DESC)
+    WHERE status = 'approved';
+
 CREATE INDEX freedom_wall_submissions_rejected_at_idx
     ON public.freedom_wall_submissions (rejected_at)
     WHERE status = 'rejected';
@@ -125,7 +133,8 @@ CREATE INDEX freedom_wall_submissions_message_search_idx
     USING GIN (to_tsvector('simple', message))
     WHERE status = 'approved';
 
--- One reaction per member per submission. A member can change their reaction.
+-- A Member can give each of the five reaction types once per submission:
+-- one row per (submission, Member, reaction type).
 CREATE TABLE public.freedom_wall_reactions (
     submission_id UUID NOT NULL
         REFERENCES public.freedom_wall_submissions(id) ON DELETE CASCADE,
@@ -136,8 +145,8 @@ CREATE TABLE public.freedom_wall_reactions (
     reaction_type public.freedom_wall_reaction_type NOT NULL,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
 
-    CONSTRAINT freedom_wall_one_reaction_per_user
-        PRIMARY KEY (submission_id, user_id)
+    CONSTRAINT freedom_wall_reactions_one_per_type
+        PRIMARY KEY (submission_id, user_id, reaction_type)
 );
 
 CREATE INDEX freedom_wall_reactions_user_idx
@@ -259,7 +268,7 @@ GRANT ALL ON TABLE public.notifications TO service_role;
 -- Public feed: returns ONLY approved submissions and safe display fields.
 -- It deliberately does NOT return author_id or is_anonymous.
 CREATE OR REPLACE FUNCTION public.list_freedom_wall_posts(
-    p_topic public.freedom_wall_topic DEFAULT NULL,
+    p_topic TEXT DEFAULT NULL,
     p_search TEXT DEFAULT NULL,
     p_sort TEXT DEFAULT 'newest',
     p_limit INTEGER DEFAULT 20,
@@ -268,7 +277,7 @@ CREATE OR REPLACE FUNCTION public.list_freedom_wall_posts(
 RETURNS TABLE (
     submission_id UUID,
     author_label TEXT,
-    topic public.freedom_wall_topic,
+    topic TEXT,
     message TEXT,
     published_at TIMESTAMPTZ,
     love_count BIGINT,
@@ -354,7 +363,7 @@ CREATE OR REPLACE FUNCTION public.get_my_freedom_wall_submissions()
 RETURNS TABLE (
     submission_id UUID,
     message TEXT,
-    topic public.freedom_wall_topic,
+    topic TEXT,
     is_anonymous BOOLEAN,
     status public.freedom_wall_submission_status,
     created_at TIMESTAMPTZ,
@@ -394,7 +403,7 @@ $$;
 -- Create a submission. The partial unique index enforces one pending row/member.
 CREATE OR REPLACE FUNCTION public.create_freedom_wall_submission(
     p_message TEXT,
-    p_topic public.freedom_wall_topic,
+    p_topic TEXT,
     p_is_anonymous BOOLEAN DEFAULT FALSE
 )
 RETURNS UUID
@@ -463,12 +472,14 @@ BEGIN
         RETURN FALSE;
     END IF;
 
+    -- The caller is the author, and the log never keeps a deleted post's
+    -- author, so this row records no actor.
     INSERT INTO public.freedom_wall_moderation_logs (
         submission_id, actor_id, action, details
     )
     VALUES (
         p_submission_id,
-        (SELECT auth.uid()),
+        NULL,
         'member_delete',
         jsonb_build_object(
             'deleted_submission_id', p_submission_id,
@@ -484,7 +495,8 @@ BEGIN
 END;
 $$;
 
--- Set or change the caller's reaction on an approved post.
+-- Add one reaction type from the caller to an approved post. Giving the same
+-- type again does nothing and keeps the original created_at.
 CREATE OR REPLACE FUNCTION public.set_freedom_wall_reaction(
     p_submission_id UUID,
     p_reaction_type public.freedom_wall_reaction_type
@@ -518,15 +530,14 @@ BEGIN
     VALUES (
         p_submission_id, (SELECT auth.uid()), p_reaction_type
     )
-    ON CONFLICT (submission_id, user_id)
-    DO UPDATE SET
-        reaction_type = EXCLUDED.reaction_type,
-        created_at = NOW();
+    ON CONFLICT (submission_id, user_id, reaction_type) DO NOTHING;
 END;
 $$;
 
+-- Remove one reaction type the caller gave. Their other types stay.
 CREATE OR REPLACE FUNCTION public.remove_my_freedom_wall_reaction(
-    p_submission_id UUID
+    p_submission_id UUID,
+    p_reaction_type public.freedom_wall_reaction_type
 )
 RETURNS BOOLEAN
 LANGUAGE plpgsql
@@ -542,7 +553,8 @@ BEGIN
 
     DELETE FROM public.freedom_wall_reactions
     WHERE submission_id = p_submission_id
-      AND user_id = (SELECT auth.uid());
+      AND user_id = (SELECT auth.uid())
+      AND reaction_type = p_reaction_type;
 
     GET DIAGNOSTICS v_deleted_count = ROW_COUNT;
     RETURN v_deleted_count > 0;
@@ -564,7 +576,7 @@ RETURNS TABLE (
     author_display_name TEXT,
     author_email TEXT,
     message TEXT,
-    topic public.freedom_wall_topic,
+    topic TEXT,
     is_anonymous BOOLEAN,
     status public.freedom_wall_submission_status,
     created_at TIMESTAMPTZ,
@@ -641,7 +653,10 @@ BEGIN
         l.id,
         l.submission_id,
         l.actor_id,
-        COALESCE(NULLIF(BTRIM(p.first_name || ' ' || p.last_name), ''), 'Former member'),
+        CASE
+            WHEN l.action = 'member_delete' THEN 'Author'
+            ELSE COALESCE(NULLIF(BTRIM(p.first_name || ' ' || p.last_name), ''), 'Former member')
+        END,
         l.action,
         l.reason,
         l.details,
@@ -774,10 +789,14 @@ END;
 $$;
 
 -- Edit content/topic without changing the original author or anonymity setting.
+-- Approved posts only: an Administrator can't edit a pending post. To fix a
+-- typo in one, reject it with a reason, or approve it and then edit it.
+-- The log row keeps the old and new topic but no message text, so nothing in
+-- the log outlives the post.
 CREATE OR REPLACE FUNCTION public.admin_edit_freedom_wall_submission(
     p_submission_id UUID,
     p_new_message TEXT,
-    p_new_topic public.freedom_wall_topic
+    p_new_topic TEXT
 )
 RETURNS VOID
 LANGUAGE plpgsql
@@ -785,15 +804,14 @@ SECURITY DEFINER
 SET search_path = ''
 AS $$
 DECLARE
-    v_old_message TEXT;
-    v_old_topic public.freedom_wall_topic;
+    v_old_topic TEXT;
 BEGIN
     IF NOT private.is_admin() THEN
         RAISE EXCEPTION 'Administrator access required.';
     END IF;
 
-    SELECT s.message, s.topic
-    INTO v_old_message, v_old_topic
+    SELECT s.topic
+    INTO v_old_topic
     FROM public.freedom_wall_submissions AS s
     WHERE s.id = p_submission_id
       AND s.status = 'approved'
@@ -826,8 +844,6 @@ BEGIN
         (SELECT auth.uid()),
         'edit',
         jsonb_build_object(
-            'old_message', v_old_message,
-            'new_message', p_new_message,
             'old_topic', v_old_topic,
             'new_topic', p_new_topic
         )
@@ -859,7 +875,7 @@ BEGIN
         RETURN FALSE;
     END IF;
 
-    -- Keep an audit snapshot even though the actual submission is deleted.
+    -- The log outlives the post, so it keeps neither the message nor the author.
     INSERT INTO public.freedom_wall_moderation_logs (
         submission_id, actor_id, action, details
     )
@@ -869,9 +885,7 @@ BEGIN
         'admin_delete',
         jsonb_build_object(
             'deleted_submission_id', v_submission.id,
-            'author_id', v_submission.author_id,
             'previous_status', v_submission.status,
-            'message', v_submission.message,
             'topic', v_submission.topic,
             'is_anonymous', v_submission.is_anonymous
         )
@@ -943,17 +957,19 @@ $$;
 -- Remove the default execute grants: PostgreSQL gives every new function to
 -- PUBLIC, and Supabase also grants functions in public to anon directly.
 REVOKE ALL ON FUNCTION public.list_freedom_wall_posts(
-    public.freedom_wall_topic, TEXT, TEXT, INTEGER, INTEGER
+    TEXT, TEXT, TEXT, INTEGER, INTEGER
 ) FROM PUBLIC, anon;
 REVOKE ALL ON FUNCTION public.get_my_freedom_wall_submissions() FROM PUBLIC, anon;
 REVOKE ALL ON FUNCTION public.create_freedom_wall_submission(
-    TEXT, public.freedom_wall_topic, BOOLEAN
+    TEXT, TEXT, BOOLEAN
 ) FROM PUBLIC, anon;
 REVOKE ALL ON FUNCTION public.delete_my_freedom_wall_submission(UUID) FROM PUBLIC, anon;
 REVOKE ALL ON FUNCTION public.set_freedom_wall_reaction(
     UUID, public.freedom_wall_reaction_type
 ) FROM PUBLIC, anon;
-REVOKE ALL ON FUNCTION public.remove_my_freedom_wall_reaction(UUID) FROM PUBLIC, anon;
+REVOKE ALL ON FUNCTION public.remove_my_freedom_wall_reaction(
+    UUID, public.freedom_wall_reaction_type
+) FROM PUBLIC, anon;
 REVOKE ALL ON FUNCTION public.admin_list_freedom_wall_submissions(
     public.freedom_wall_submission_status, INTEGER, INTEGER
 ) FROM PUBLIC, anon;
@@ -961,7 +977,7 @@ REVOKE ALL ON FUNCTION public.admin_list_freedom_wall_moderation_logs(UUID, INTE
 REVOKE ALL ON FUNCTION public.admin_approve_freedom_wall_submission(UUID) FROM PUBLIC, anon;
 REVOKE ALL ON FUNCTION public.admin_reject_freedom_wall_submission(UUID, TEXT) FROM PUBLIC, anon;
 REVOKE ALL ON FUNCTION public.admin_edit_freedom_wall_submission(
-    UUID, TEXT, public.freedom_wall_topic
+    UUID, TEXT, TEXT
 ) FROM PUBLIC, anon;
 REVOKE ALL ON FUNCTION public.admin_delete_freedom_wall_submission(UUID) FROM PUBLIC, anon;
 REVOKE ALL ON FUNCTION public.mark_notification_read(UUID) FROM PUBLIC, anon;
@@ -969,19 +985,21 @@ REVOKE ALL ON FUNCTION public.mark_all_notifications_read() FROM PUBLIC, anon;
 
 -- Public feed can be called by visitors and signed-in members.
 GRANT EXECUTE ON FUNCTION public.list_freedom_wall_posts(
-    public.freedom_wall_topic, TEXT, TEXT, INTEGER, INTEGER
+    TEXT, TEXT, TEXT, INTEGER, INTEGER
 ) TO anon, authenticated;
 
 -- Member operations require authentication. Admin RPCs also check private.is_admin().
 GRANT EXECUTE ON FUNCTION public.get_my_freedom_wall_submissions() TO authenticated;
 GRANT EXECUTE ON FUNCTION public.create_freedom_wall_submission(
-    TEXT, public.freedom_wall_topic, BOOLEAN
+    TEXT, TEXT, BOOLEAN
 ) TO authenticated;
 GRANT EXECUTE ON FUNCTION public.delete_my_freedom_wall_submission(UUID) TO authenticated;
 GRANT EXECUTE ON FUNCTION public.set_freedom_wall_reaction(
     UUID, public.freedom_wall_reaction_type
 ) TO authenticated;
-GRANT EXECUTE ON FUNCTION public.remove_my_freedom_wall_reaction(UUID) TO authenticated;
+GRANT EXECUTE ON FUNCTION public.remove_my_freedom_wall_reaction(
+    UUID, public.freedom_wall_reaction_type
+) TO authenticated;
 GRANT EXECUTE ON FUNCTION public.admin_list_freedom_wall_submissions(
     public.freedom_wall_submission_status, INTEGER, INTEGER
 ) TO authenticated;
@@ -989,13 +1007,11 @@ GRANT EXECUTE ON FUNCTION public.admin_list_freedom_wall_moderation_logs(UUID, I
 GRANT EXECUTE ON FUNCTION public.admin_approve_freedom_wall_submission(UUID) TO authenticated;
 GRANT EXECUTE ON FUNCTION public.admin_reject_freedom_wall_submission(UUID, TEXT) TO authenticated;
 GRANT EXECUTE ON FUNCTION public.admin_edit_freedom_wall_submission(
-    UUID, TEXT, public.freedom_wall_topic
+    UUID, TEXT, TEXT
 ) TO authenticated;
 GRANT EXECUTE ON FUNCTION public.admin_delete_freedom_wall_submission(UUID) TO authenticated;
 GRANT EXECUTE ON FUNCTION public.mark_notification_read(UUID) TO authenticated;
 GRANT EXECUTE ON FUNCTION public.mark_all_notifications_read() TO authenticated;
-
-COMMIT;
 
 -- ---------------------------------------------------------------------------
 -- 9. SUPABASE CRON: DELETE REJECTED SUBMISSIONS AFTER 30 DAYS
@@ -1005,8 +1021,13 @@ COMMIT;
 -- Related reactions are deleted by ON DELETE CASCADE. Notifications remain;
 -- their reference_id is informational and does not have a foreign key.
 -- Moderation logs also remain as audit history.
+-- The job is unscheduled by name first, so this block can run again safely.
 
 CREATE EXTENSION IF NOT EXISTS pg_cron WITH SCHEMA pg_catalog;
+
+SELECT cron.unschedule(jobid)
+FROM cron.job
+WHERE jobname = 'freedom-wall-delete-expired-rejections';
 
 SELECT cron.schedule(
     'freedom-wall-delete-expired-rejections',
@@ -1017,6 +1038,8 @@ SELECT cron.schedule(
           AND rejected_at <= NOW() - INTERVAL '30 days';
     $cron$
 );
+
+COMMIT;
 
 -- ---------------------------------------------------------------------------
 -- Administrators: see "Make the first Administrator" in supabase/README.md.
