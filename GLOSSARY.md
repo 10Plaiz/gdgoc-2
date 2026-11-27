@@ -41,7 +41,7 @@ _Upcoming_ (not started), _Ongoing_ (started, not ended) or _Completed_ (ended).
 _Avoid_: Current event, past event, coming soon (as a status)
 
 **Registration status**:
-Whether an upcoming Event takes registrations: _not open yet_, _open_ or _closed_. Set by an Administrator, with an optional closing time that closes it automatically. Together with Event timing it produces the PRD's status labels (Upcoming, Registration Open, Registration Closed, Ongoing).
+Whether an Event takes registrations: _not open yet_, _open_ or _closed_. Set by an Administrator, with an optional closing time that closes it automatically. Registration can stay open while the Event is Ongoing and always closes when it ends. Together with Event timing it produces the PRD's status labels (Upcoming, Registration Open, Registration Closed, Ongoing).
 _Avoid_: Status (on its own)
 
 **Featured event**:

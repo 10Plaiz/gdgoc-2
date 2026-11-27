@@ -34,9 +34,10 @@ The app talks to Supabase with the public anon key, so Row Level Security (RLS) 
 
 - Put rules about valid data in the table as `check`, `not null`, `unique` or foreign-key constraints, not only in the app. Name each constraint (`<table>_<rule>`).
 - Prefer a `text` column with a `check (... in (...))` over a Postgres `enum` for lists the chapter may change (categories, palettes).
-- Never store what can be derived. For example, Upcoming or Past follows from `starts_at`.
+- Never store what can be derived. For example, Event timing (upcoming, ongoing, completed) follows from `starts_at` and `ends_at`, computed once in `event_listings`.
 - Use `timestamptz` for times and `uuid` primary keys from `gen_random_uuid()`.
-- Index every foreign key, and every column an RLS policy or a common query filters on. Use partial indexes for filtered lists (`where is_published`).
+- Index every foreign key, and every column an RLS policy or a common query filters on. Use partial indexes for filtered lists (`where publish_status = 'published'`).
+- Under RLS, Postgres uses an index only for leakproof comparisons (`=`, `<`, `>` on text, numbers and timestamps). It can't use one for `ilike` or a function call (`private.event_year(starts_at) = 2026`). Check the plan as `anon` (`set local role anon; explain …`), not as `postgres`, which skips RLS.
 
 ### Storage
 

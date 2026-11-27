@@ -106,8 +106,9 @@ git switch -c <type>/<short-slug> upstream/dev
 
 - `npm run lint`
 - `npm run build`
+- If the change touches `gdgoc/supabase/`: `npx supabase db reset`, `npx supabase test db` and `npx supabase db advisors --local` (advisors must report nothing)
 
-There is no test runner yet. The first ticket on the backlog is **"Set up Vitest + React Testing Library"**. Until it lands, `tdd` steps fall back to Verify. Once it lands, add `npm test` to this list.
+There is no app test runner yet (database changes use pgTAP, above). The first ticket on the backlog is **"Set up Vitest + React Testing Library"**. Until it lands, `tdd` steps fall back to Verify. Once it lands, add `npm test` to this list.
 
 **Ship.** First, run the privacy check in `AGENTS.md` → *Privacy and safety*: no secrets and no real personal data in the diff. Then push to your fork and open a PR against the canonical `dev`:
 

@@ -120,7 +120,7 @@
 
 - **events:** `title`, `summary`, `body`, `category` (workshop, hackathon, talk, social), `starts_at`, `ends_at`, `venue`, `cover_path`, `registration_url`, `registration_status`, `registration_closes_at`, `publish_status`, `is_featured`, timestamps.
   - At most one Event is featured, and only a published one.
-  - Event timing is computed from `coalesce(ends_at, starts_at)`, in one shared place, never stored.
+  - Every Event has a required `ends_at`. Event timing is computed from `starts_at` and `ends_at`, in one shared place, never stored.
 - **event_timeline_items:** `event_id`, `starts_at`, `ends_at`, `title`, `description`, `position`.
 - **event_photos:** `event_id`, `path`, `caption`, `alt_text`, `position`, capped per Event.
 - The public sees only published Events; Administrators see and write everything.

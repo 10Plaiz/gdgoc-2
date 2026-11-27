@@ -1,0 +1,158 @@
+-- event-media: cover images and Gallery photos (proposal 0001, finding F9).
+--
+-- The bucket is private. Every file lives under "<event id>/", and storage
+-- policies let anyone read it only while that Event is published, so a draft's
+-- poster never leaks by URL. Only Administrators upload, replace or delete.
+-- The website shows images through signed URLs (createSignedUrl), which the
+-- Storage API only issues when the select policy below allows it.
+--
+-- Limits: 2 MB, WebP/JPEG/PNG only. SVG is refused because it can carry
+-- scripts. The browser shrinks images to WebP (about 1280 px) before upload.
+
+insert into storage.buckets (id, name, public, file_size_limit, allowed_mime_types)
+values (
+  'event-media',
+  'event-media',
+  false,
+  2097152,
+  array['image/webp', 'image/jpeg', 'image/png']
+)
+on conflict (id) do update
+  set public             = excluded.public,
+      file_size_limit    = excluded.file_size_limit,
+      allowed_mime_types = excluded.allowed_mime_types;
+
+-- An earlier draft used a public "event-images" bucket. If it exists (it may
+-- in production), make it private so draft posters stop being reachable by
+-- URL. Its files are kept; delete them from the dashboard once moved.
+update storage.buckets set public = false where id = 'event-images';
+
+-- ---------------------------------------------------------------------------
+-- private.event_media_has_event(): true when a storage path sits in the
+-- folder of an Event that exists. Uploads and renames must pass it.
+-- security invoker: events RLS lets Administrators, the only writers, see
+-- every Event.
+-- ---------------------------------------------------------------------------
+create or replace function private.event_media_has_event(p_name text)
+returns boolean
+language sql
+stable
+security invoker
+set search_path = ''
+as $$
+  select exists (
+    select 1 from public.events e where e.id = private.event_media_owner(p_name)
+  );
+$$;
+
+revoke all on function private.event_media_has_event(text) from public;
+grant execute on function private.event_media_has_event(text) to authenticated, service_role;
+
+-- ---------------------------------------------------------------------------
+-- Storage budget (Free Plan: 1 GB shared across the organisation).
+-- An Event's folder holds at most 21 files: the cover and the 20 Gallery
+-- photos event_photos allows. Files are counted, not rows, so files without a
+-- photo row (failed or abandoned uploads) still count against the folder.
+--
+-- private.event_media_has_room(name, id): true when the file can land at
+-- `name` without the folder going over 21. It skips the file already at that
+-- path (an upsert replaces it) and the row being changed (a rename or move
+-- takes it out of its old place), so replacing or renaming inside a full
+-- folder still works.
+--
+-- A best-effort cap, not a hard one. The Storage API checks these policies
+-- before it writes and, from storage-api v1.81.0, again inside the write's own
+-- transaction. Neither check locks the folder, so two uploads sent at the same
+-- moment can each count 20 files and both pass. The admin panel uploads one file
+-- at a time (README). A single multi-row SQL insert by service_role also skips
+-- it. The 20-photo cap on event_photos rows is the hard limit.
+-- ---------------------------------------------------------------------------
+create or replace function private.event_media_has_room(p_name text, p_id uuid)
+returns boolean
+language sql
+stable
+security invoker
+set search_path = ''
+as $$
+  select count(*) < 21
+  from storage.objects o
+  where o.bucket_id = 'event-media'
+    and private.event_media_owner(o.name) = private.event_media_owner(p_name)
+    and o.name <> p_name
+    and o.id is distinct from p_id;
+$$;
+
+revoke all on function private.event_media_has_room(text, uuid) from public;
+grant execute on function private.event_media_has_room(text, uuid) to authenticated, service_role;
+
+-- One select policy for both roles, so Postgres evaluates a single policy per row.
+create policy "Anyone reads media of published Events; Administrators read all"
+  on storage.objects for select
+  to anon, authenticated
+  using (
+    bucket_id = 'event-media'
+    and (
+      private.event_is_published(private.event_media_owner(name))
+      or (select private.is_admin())
+    )
+  );
+
+create policy "Administrators upload event media"
+  on storage.objects for insert
+  to authenticated
+  with check (
+    bucket_id = 'event-media'
+    and (select private.is_admin())
+    and private.event_media_has_event(name)
+    and private.event_media_has_room(name, id)
+  );
+
+-- Covers replacing a file and renaming or moving one (Storage API move()).
+create policy "Administrators replace event media"
+  on storage.objects for update
+  to authenticated
+  using (bucket_id = 'event-media' and (select private.is_admin()))
+  with check (
+    bucket_id = 'event-media'
+    and (select private.is_admin())
+    and private.event_media_has_event(name)
+    and private.event_media_has_room(name, id)
+  );
+
+create policy "Administrators delete event media"
+  on storage.objects for delete
+  to authenticated
+  using (bucket_id = 'event-media' and (select private.is_admin()));
+
+-- ---------------------------------------------------------------------------
+-- No orphaned files: an Event can be deleted only once its folder is empty.
+-- Rows can cascade, but files must be removed through the Storage API (it
+-- deletes the stored bytes too), so the admin panel empties the folder with
+-- storage.from('event-media').remove([...]) and then deletes the Event.
+-- security invoker: Administrators, the only ones who can delete Events, can
+-- see every file in the bucket.
+-- ---------------------------------------------------------------------------
+create or replace function private.refuse_event_delete_with_media()
+returns trigger
+language plpgsql
+security invoker
+set search_path = ''
+as $$
+begin
+  if exists (
+    select 1 from storage.objects o
+    where o.bucket_id = 'event-media'
+      and private.event_media_owner(o.name) = old.id
+  ) then
+    raise exception 'Delete the Event''s images in event-media/%/ before deleting the Event', old.id
+      using errcode = '23503';
+  end if;
+  return old;
+end;
+$$;
+
+revoke all on function private.refuse_event_delete_with_media() from public;
+
+create trigger events_refuse_delete_with_media
+  before delete on public.events
+  for each row execute function private.refuse_event_delete_with_media();
